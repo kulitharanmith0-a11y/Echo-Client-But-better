@@ -68,8 +68,8 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
 
 public class AutoAnchor extends Module {
-    private static final CharSequence styleOption = CatalogText.literal("Echo");
-    private static final CharSequence styleOption2 = CatalogText.literal("System");
+    private static final CharSequence styleOption = CatalogText.literal("Blatant");
+    private static final CharSequence styleOption2 = CatalogText.literal("Legit");
     private static final CharSequence modeOption = CatalogText.literal("Hold");
     private static final CharSequence modeOption2 = CatalogText.literal("Click");
     private static final int USE_COOLDOWN_TICKS = 4;

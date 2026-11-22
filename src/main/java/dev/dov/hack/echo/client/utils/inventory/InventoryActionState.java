@@ -1,0 +1,6 @@
+package dev.dov.hack.echo.client.utils.inventory;
+
+public enum InventoryActionState {
+    IDLE, WAIT_BEFORE_OPEN, WAIT_AFTER_OPEN,
+    WAIT_BEFORE_CLOSE
+}

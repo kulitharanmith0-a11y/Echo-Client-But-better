@@ -1,0 +1,67 @@
+package dev.dov.hack.echo.client.mixin;
+
+import dev.dov.hack.echo.client.EchoClient;
+import dev.dov.hack.echo.client.event.network.PacketReceiveEvent;
+import dev.dov.hack.echo.client.event.network.PacketSendEvent;
+import dev.dov.hack.echo.client.handlers.action.ActionCoordinator;
+import io.netty.channel.ChannelFutureListener;
+import net.minecraft.network.ClientConnection;
+import net.minecraft.network.listener.PacketListener;
+import net.minecraft.network.packet.Packet;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+@Mixin(ClientConnection.class)
+public class ClientConnectionMixin {
+    @Unique private boolean echo$resendingWithoutFlush;
+
+    @Inject(method = "handlePacket", at = @At("HEAD"), cancellable = true)
+    private static <T extends PacketListener> void beforeHandlePacket(
+            Packet<T> packet, PacketListener listener, CallbackInfo callback) {
+        if (EchoClient.eventsDisabled) {
+            return;
+        }
+        ActionCoordinator coordinator = ActionCoordinator.get();
+        if (coordinator != null) {
+            coordinator.onServerPacketReceived(packet);
+        }
+        PacketReceiveEvent event = new PacketReceiveEvent(packet);
+        event.post();
+        if (event.cancelled) {
+            callback.cancel();
+        }
+    }
+
+    @Inject(method = "send(Lnet/minecraft/network/packet/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"), cancellable = true)
+    private void beforeSend(Packet<?> packet, ChannelFutureListener listener, boolean flush, CallbackInfo callback) {
+        if (EchoClient.eventsDisabled) {
+            return;
+        }
+        if (echo$resendingWithoutFlush) {
+            return;
+        }
+        PacketSendEvent event = new PacketSendEvent(packet);
+        event.post();
+        if (event.cancelled) {
+            callback.cancel();
+            return;
+        }
+        ActionCoordinator coordinator = ActionCoordinator.get();
+        if (coordinator != null && coordinator.filterOutgoingPacket(packet)) {
+            callback.cancel();
+            return;
+        }
+        if (flush && !event.shouldFlush()) {
+            callback.cancel();
+            echo$resendingWithoutFlush = true;
+            try {
+                ((ClientConnection) (Object) this).send(packet, listener, false);
+            } finally {
+                echo$resendingWithoutFlush = false;
+            }
+        }
+    }
+}

@@ -1,0 +1,40 @@
+package dev.dov.hack.echo.client.mixin;
+
+import dev.dov.hack.echo.client.EchoClient;
+import dev.dov.hack.echo.client.MinecraftAccess;
+import dev.dov.hack.echo.client.modules.impl.render.Freecam;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.Frustum;
+import net.minecraft.client.render.RenderTickCounter;
+import net.minecraft.client.render.WorldRenderer;
+import net.minecraft.client.render.entity.state.EntityRenderState;
+import net.minecraft.client.render.state.WorldRenderState;
+import net.minecraft.entity.Entity;
+import net.minecraft.world.tick.TickManager;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+@Mixin(WorldRenderer.class)
+public abstract class WorldRendererEntityStateMixin {
+    @Shadow
+    protected abstract EntityRenderState getAndUpdateRenderState(Entity entity, float tickProgress);
+
+    @Inject(method = "fillEntityRenderStates", at = @At("RETURN"))
+    private void onFillEntityRenderStatesReturn(Camera camera, Frustum frustum, RenderTickCounter ticks, WorldRenderState state, CallbackInfo callback) {
+        if (MinecraftAccess.CLIENT.player != null && MinecraftAccess.CLIENT.world != null
+                && !EchoClient.eventsDisabled && EchoClient.ModuleManager != null) {
+            Freecam freecam = (Freecam) EchoClient.ModuleManager.findFeature(Freecam.class);
+            if (freecam.isEnabled()) {
+                ClientPlayerEntity player = MinecraftAccess.CLIENT.player;
+                TickManager tickManager = MinecraftAccess.CLIENT.world.getTickManager();
+                float tickProgress = ticks.getTickProgress(!tickManager.shouldSkipTick(player));
+                EntityRenderState playerState = getAndUpdateRenderState(player, tickProgress);
+                state.entityRenderStates.add(playerState);
+            }
+        }
+    }
+}

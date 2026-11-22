@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "clumps",
+  "version": "29.0.0.1",
+  "name": "Clumps",
+  "description": "Clumps XP orbs together to reduce lag",
+  "icon": "clumps.png",
+  "authors": [
+    "Jaredlll08"
+  ],
+  "environment": "*",
+  "entrypoints": {
+    "preLaunch": [
+      "dev.dov.hack.echo.client.PreLaunch"
+    ],
+    "main": [
+      "dev.dov.hack.echo.client.init.Initializer"
+    ]
+  },
+  "mixins": [
+    "echo.mixins.json",
+    "echo-render.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "1.21.11",
+    "fabricloader": ">=0.19.3",
+    "fabric-api": ">=0.141.6+1.21.11",
+    "java": ">=21"
+  }
+}

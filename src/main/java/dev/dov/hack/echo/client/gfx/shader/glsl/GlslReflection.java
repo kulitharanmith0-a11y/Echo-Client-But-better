@@ -1,0 +1,11 @@
+package dev.dov.hack.echo.client.gfx.shader.glsl;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public final class GlslReflection {
+    public Map<String, TextureMapping> textureMappings = new LinkedHashMap<>();
+    public List<PushConstantItem> pushConstantItems = new ArrayList<>();
+}

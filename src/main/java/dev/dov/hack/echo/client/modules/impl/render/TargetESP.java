@@ -1,0 +1,79 @@
+package dev.dov.hack.echo.client.modules.impl.render;
+
+import dev.dov.hack.echo.client.init.CatalogText;
+import dev.dov.hack.echo.client.event.Subscribe;
+import dev.dov.hack.echo.client.event.render.WorldRenderEvent;
+import dev.dov.hack.echo.client.modules.Module;
+import dev.dov.hack.echo.client.render.player.TargetMotionTrail;
+import dev.dov.hack.echo.client.settings.ChoiceSetting;
+import dev.dov.hack.echo.client.settings.ColorSetting;
+
+public class TargetESP extends Module {
+    public static TargetESP instance;
+    private static final CharSequence modeOption = CatalogText.literal("Circle");
+    private static final CharSequence chainsModeOption = CatalogText.literal("Chains");
+    public static ChoiceSetting mode;
+    private static ColorSetting color;
+    private TargetMotionTrail trail;
+
+    public TargetESP() {
+        super(new dev.dov.hack.echo.client.modules.ModuleInfo(dev.dov.hack.echo.client.init.CatalogText.literal("Target ESP"), dev.dov.hack.echo.client.init.CatalogText.literal("Highlights current target"), dev.dov.hack.echo.client.modules.ModuleCategory.RENDER));
+    }
+
+    @Override
+    public void postInitialize() {
+        trail = new TargetMotionTrail(color, 48, 0.0f);
+        instance = this;
+        mode.onChange(trail::clearHistory);
+        color.tooltip("Appearance");
+    }
+
+    @Override
+    public void onDisable() {
+        super.onDisable();
+        try {
+            Class.forName(TargetMotionTrail.class.getName(), true, TargetMotionTrail.class.getClassLoader());
+        } catch (ClassNotFoundException failure) {
+            throw new IllegalStateException("Resolved class initialization failed", failure);
+        }
+        TargetMotionTrail currentTrail = trail;
+        try {
+            Class.forName(TargetMotionTrail.class.getName(), true, TargetMotionTrail.class.getClassLoader());
+        } catch (ClassNotFoundException failure) {
+            throw new IllegalStateException("Resolved class initialization failed", failure);
+        }
+        currentTrail.clearHistory();
+    }
+
+    @Subscribe
+    private void onWorldRender(WorldRenderEvent event) {
+        boolean checkMode = Freecam.isPerspectiveRefreshEnabled();
+        boolean render = isOutsideWorld();
+        if (checkMode) {
+            if (render) {
+                return;
+            }
+            render = mode.isSelected(modeOption);
+        }
+        if (render) {
+            trail.render(event);
+        }
+    }
+
+    
+    public static void appendBootstrapSettings(TargetESP Module) {
+        dev.dov.hack.echo.client.init.CatalogSettings.append(Module, TargetESP.mode);
+        dev.dov.hack.echo.client.init.CatalogSettings.append(Module, TargetESP.color);
+    }
+
+    
+    public static java.lang.CharSequence bootstrapModeOption() {
+        return modeOption;
+    }
+
+    
+    public static void assignBootstrapSettings(TargetESP Module, dev.dov.hack.echo.client.settings.ColorSetting preparedColor, dev.dov.hack.echo.client.settings.ChoiceSetting preparedMode) {
+        TargetESP.color = preparedColor;
+        TargetESP.mode = preparedMode;
+    }
+}

@@ -1,6 +1,7 @@
 package dev.dov.hack.echo.client.mixin;
 
 import dev.dov.hack.echo.client.EchoClient;
+import dev.dov.hack.echo.client.modules.impl.render.Animations;
 import dev.dov.hack.echo.client.modules.impl.render.ViewModel;
 import dev.dov.hack.echo.client.gfx.HandChamsRenderer;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
@@ -41,21 +42,24 @@ public class HeldItemRendererMixin {
             return;
         }
         ViewModel viewModel = (ViewModel) EchoClient.ModuleManager.findFeature(ViewModel.class);
-        if (viewModel == null || !viewModel.isEnabled()) {
-            return;
+        if (viewModel != null && viewModel.isEnabled()) {
+            float x = hand == Hand.MAIN_HAND ? ViewModel.posXMain.getValue() : ViewModel.posXOff.getValue();
+            float y = hand == Hand.MAIN_HAND ? ViewModel.posYMain.getValue() : ViewModel.posYOff.getValue();
+            float z = hand == Hand.MAIN_HAND ? ViewModel.posZMain.getValue() : ViewModel.posZOff.getValue();
+            float rotationX = hand == Hand.MAIN_HAND ? ViewModel.rotXMain.getValue() : ViewModel.rotXOff.getValue();
+            float rotationY = hand == Hand.MAIN_HAND ? ViewModel.rotYMain.getValue() : ViewModel.rotYOff.getValue();
+            float rotationZ = hand == Hand.MAIN_HAND ? ViewModel.rotZMain.getValue() : ViewModel.rotZOff.getValue();
+            float scale = hand == Hand.MAIN_HAND ? ViewModel.scaleMain.getValue() : ViewModel.scaleOff.getValue();
+            matrices.translate(x, y, z);
+            matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(rotationX));
+            matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(rotationY));
+            matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(rotationZ));
+            matrices.scale(scale, scale, scale);
         }
-        float x = hand == Hand.MAIN_HAND ? ViewModel.posXMain.getValue() : ViewModel.posXOff.getValue();
-        float y = hand == Hand.MAIN_HAND ? ViewModel.posYMain.getValue() : ViewModel.posYOff.getValue();
-        float z = hand == Hand.MAIN_HAND ? ViewModel.posZMain.getValue() : ViewModel.posZOff.getValue();
-        float rotationX = hand == Hand.MAIN_HAND ? ViewModel.rotXMain.getValue() : ViewModel.rotXOff.getValue();
-        float rotationY = hand == Hand.MAIN_HAND ? ViewModel.rotYMain.getValue() : ViewModel.rotYOff.getValue();
-        float rotationZ = hand == Hand.MAIN_HAND ? ViewModel.rotZMain.getValue() : ViewModel.rotZOff.getValue();
-        float scale = hand == Hand.MAIN_HAND ? ViewModel.scaleMain.getValue() : ViewModel.scaleOff.getValue();
-        matrices.translate(x, y, z);
-        matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(rotationX));
-        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(rotationY));
-        matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(rotationZ));
-        matrices.scale(scale, scale, scale);
+        Animations animations = (Animations) EchoClient.ModuleManager.findFeature(Animations.class);
+        if (animations != null && animations.isEnabled()) {
+            animations.applyItemOverlayTransform(player, hand, equipProgress, swingProgress, matrices);
+        }
     }
 
     @Inject(method = "swingArm(FLnet/minecraft/client/util/math/MatrixStack;ILnet/minecraft/util/Arm;)V", at = @At("HEAD"), cancellable = true)
@@ -64,6 +68,12 @@ public class HeldItemRendererMixin {
             return;
         }
         if (EchoClient.ModuleManager != null) {
+            Animations animations = (Animations) EchoClient.ModuleManager.findFeature(Animations.class);
+            if (animations != null && animations.overridesSwing()) {
+                callback.cancel();
+                animations.applySwing(swingProgress, matrices, armSign, arm);
+                return;
+            }
             ViewModel viewModel = (ViewModel) EchoClient.ModuleManager.findFeature(ViewModel.class);
             if (viewModel != null && viewModel.isEnabled()) {
                 callback.cancel();

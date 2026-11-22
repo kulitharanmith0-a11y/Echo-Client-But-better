@@ -2,7 +2,6 @@ package dev.dov.hack.echo.client.render;
 
 import dev.dov.hack.echo.client.EchoClient;
 import dev.dov.hack.echo.client.gui.ClientScreen;
-import dev.dov.hack.echo.client.render.ui.GuiDimensions;
 import dev.jadyen.hack.echo.natives.WindowHandle;
 import dev.dov.hack.echo.client.gfx.command.CommandEncoder;
 import dev.dov.hack.echo.client.gfx.opengl.OpenGlDevice;
@@ -17,7 +16,6 @@ import dev.dov.hack.echo.client.gfx.texture.TextureView;
 import java.util.OptionalInt;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.util.Window;
-import org.lwjgl.glfw.GLFW;
 
 public final class RenderBackendManager implements AutoCloseable {
     private static final int GRAPHICS_AND_PRESENT_QUEUE = 9;
@@ -33,7 +31,6 @@ public final class RenderBackendManager implements AutoCloseable {
     private int framebufferHeight;
     private final boolean openGl;
     private final FramebufferBlur framebufferBlur;
-    private boolean streamProofCursorHidden;
 
     public RenderBackendManager() {
         FramebufferBlur createdBlur = new FramebufferBlur();
@@ -65,7 +62,6 @@ public final class RenderBackendManager implements AutoCloseable {
     }
 
     public void hideOverlayImmediately() {
-        restoreCursorIfHidden();
         window.setVisible(false);
     }
 
@@ -106,19 +102,16 @@ public final class RenderBackendManager implements AutoCloseable {
                 && !window.isOwnerMinimizedOrHidden()
                 && !window.isOwnerExclusiveFullscreen();
         if (!visible) {
-            restoreCursorIfHidden();
             window.setVisible(false);
             return;
         }
 
         window.synchronizeWithMainWindow();
         if (window.isOwnerMinimizedOrHidden() || window.isOwnerExclusiveFullscreen()) {
-            restoreCursorIfHidden();
             window.setVisible(false);
             return;
         }
         if (!window.prepareCaptureProtectedShow()) {
-            restoreCursorIfHidden();
             window.setVisible(false);
             if (window.isCaptureFailed()) {
                 EchoClient.failStreamProof();
@@ -128,14 +121,12 @@ public final class RenderBackendManager implements AutoCloseable {
         int width = window.framebufferWidth();
         int height = window.framebufferHeight();
         if (width <= 0 || height <= 0) {
-            restoreCursorIfHidden();
             window.setVisible(false);
             return;
         }
 
         boolean clientScreenOpen = client.currentScreen instanceof ClientScreen;
         boolean vanillaScreenOpen = client.currentScreen != null && !clientScreenOpen;
-        updateStreamProofCursor(client, mcWindow, clientScreenOpen);
 
         PresentMode requestedMode = client.options.getEnableVsync().getValue()
                 ? PresentMode.FIFO : PresentMode.IMMEDIATE;
@@ -162,9 +153,6 @@ public final class RenderBackendManager implements AutoCloseable {
             } else {
                 EchoClient.worldRenderer.compositeToTarget(commands, target, EchoClient.worldRenderer.mainColorTexture(), true);
             }
-            if (clientScreenOpen) {
-                drawStreamProofCursor(client, mcWindow);
-            }
             EchoClient.uiRenderer.beginFrame(commands, target, depthTexture.views[0], OptionalInt.empty());
             EchoClient.uiRenderer.endFrame();
         }
@@ -172,69 +160,8 @@ public final class RenderBackendManager implements AutoCloseable {
         window.setVisible(true);
     }
 
-    private void updateStreamProofCursor(MinecraftClient client, Window mcWindow, boolean hideOsCursor) {
-        if (mcWindow == null) {
-            return;
-        }
-        long handle = mcWindow.getHandle();
-        if (handle == 0L) {
-            return;
-        }
-        if (hideOsCursor) {
-            if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
-                GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
-            }
-            streamProofCursorHidden = true;
-        } else if (streamProofCursorHidden) {
-            restoreCursorIfHidden();
-        }
-    }
-
-    private void restoreCursorIfHidden() {
-        if (!streamProofCursorHidden) {
-            return;
-        }
-        streamProofCursorHidden = false;
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || client.getWindow() == null) {
-            return;
-        }
-        long handle = client.getWindow().getHandle();
-        if (handle == 0L) {
-            return;
-        }
-        int desired = (client.currentScreen == null && client.mouse != null && client.mouse.isCursorLocked())
-                ? GLFW.GLFW_CURSOR_DISABLED
-                : GLFW.GLFW_CURSOR_NORMAL;
-        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) == GLFW.GLFW_CURSOR_HIDDEN) {
-            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, desired);
-        }
-    }
-
-    private static void drawStreamProofCursor(MinecraftClient client, Window mcWindow) {
-        if (EchoClient.uiRenderer == null || client.mouse == null || mcWindow == null) {
-            return;
-        }
-        int scaledW = mcWindow.getScaledWidth();
-        int scaledH = mcWindow.getScaledHeight();
-        if (scaledW <= 0 || scaledH <= 0) {
-            return;
-        }
-        float x = (float) (client.mouse.getScaledX(mcWindow) * GuiDimensions.width() / scaledW);
-        float y = (float) (client.mouse.getScaledY(mcWindow) * GuiDimensions.height() / scaledH);
-        // Clean software pointer drawn exclusively on the capture-excluded overlay window.
-        EchoClient.uiRenderer.drawQuadraticStroke(x, y, x + 5.0f, y + 6.0f, x + 10.5f, y + 11.5f, 3.2f, 0xFF000000);
-        EchoClient.uiRenderer.drawQuadraticStroke(x, y, x, y + 7.5f, x, y + 14.5f, 3.2f, 0xFF000000);
-        EchoClient.uiRenderer.drawQuadraticStroke(x, y + 14.0f, x + 4.5f, y + 11.5f, x + 10.0f, y + 11.5f, 3.0f, 0xFF000000);
-        EchoClient.uiRenderer.drawQuadraticStroke(x + 0.6f, y + 0.8f, x + 4.8f, y + 5.8f, x + 9.4f, y + 10.6f, 1.8f, 0xFFFFFFFF);
-        EchoClient.uiRenderer.drawQuadraticStroke(x + 0.6f, y + 0.8f, x + 0.6f, y + 7.2f, x + 0.6f, y + 13.2f, 1.8f, 0xFFFFFFFF);
-        EchoClient.uiRenderer.drawQuadraticStroke(x + 0.8f, y + 12.8f, x + 4.4f, y + 10.8f, x + 9.0f, y + 10.8f, 1.6f, 0xFFFFFFFF);
-        EchoClient.uiRenderer.drawRoundedRect(x - 1.0f, y - 1.0f, 3.2f, 3.2f, 1.6f, 0xFFFFFFFF, 0.8f, 0xFF000000);
-    }
-
     @Override
     public void close() {
-        closeQuietly(this::restoreCursorIfHidden);
         closeQuietly(() -> window.setVisible(false));
         closeQuietly(queue::waitIdle);
         closeQuietly(framebufferBlur::close);

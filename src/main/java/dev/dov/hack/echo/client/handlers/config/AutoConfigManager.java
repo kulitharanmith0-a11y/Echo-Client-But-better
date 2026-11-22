@@ -80,7 +80,7 @@ public final class AutoConfigManager extends ClientHandler {
     private final Map<String, String> serverOverrides = new LinkedHashMap<>();
 
     private boolean enabled;
-    private boolean notifyOnSwitch = true;
+    private boolean notifyOnSwitch = false;
     private int stabilityDelayMs = 350;
     private String fallbackConfig = "";
 
@@ -395,9 +395,6 @@ public final class AutoConfigManager extends ClientHandler {
     public void triggerUnlockRescan() {
         unlockCurrentKit();
         forceImmediateRescan = true;
-        if (notifyOnSwitch && CLIENT.player != null) {
-            ChatHudMessages.addMessage(Text.literal("Auto Config: Unlocked & re-scanning hotbar"));
-        }
     }
 
     public void reset() {
@@ -568,11 +565,7 @@ public final class AutoConfigManager extends ClientHandler {
         if (EchoClient.ModuleConfig == null || configName == null || configName.isBlank()) {
             return false;
         }
-        boolean loaded = EchoClient.ModuleConfig.loadForAutoConfig(configName);
-        if (loaded && notifyOnSwitch) {
-            ChatHudMessages.addMessage(Text.literal("Auto Config: " + kitLabel + " -> " + configName));
-        }
-        return loaded;
+        return EchoClient.ModuleConfig.loadForAutoConfig(configName);
     }
 
     private DetectedKit detectKit() {

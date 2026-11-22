@@ -1570,8 +1570,12 @@ public final class FeatureDefaults {
 
     public static void initialize(dev.dov.hack.echo.client.modules.impl.combat.AutoWeb Module) {
 
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Style"), CatalogText.literal("Legit"), new java.lang.CharSequence[] {CatalogText.literal("Legit"), CatalogText.literal("Blatant")});
         dev.dov.hack.echo.client.settings.ChoiceSetting preparedMode = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Mode"), CatalogText.literal("On Key"), new java.lang.CharSequence[] {CatalogText.literal("On Key"), CatalogText.literal("Always")});
         dev.dov.hack.echo.client.settings.KeybindSetting preparedActivateKey = new dev.dov.hack.echo.client.settings.KeybindSetting(CatalogText.literal("Activate Key"), dev.dov.hack.echo.client.keyboard.InputKey.NONE);
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedSwapMode = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Swap Mode"), CatalogText.literal("Legit"), new java.lang.CharSequence[] {CatalogText.literal("Legit"), CatalogText.literal("Silent")});
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedSwapBack = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Swap Back"), true);
+        dev.dov.hack.echo.client.settings.IntSetting preparedSwapDelay = new dev.dov.hack.echo.client.settings.IntSetting(CatalogText.literal("Swap Delay"), 1, 1, 6, CatalogText.literal(" ticks"));
         dev.dov.hack.echo.client.settings.FloatSetting preparedRange = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Range"), 4.2f, 1.5f, 5.5f, 0.1f, CatalogText.literal(" blocks"));
         dev.dov.hack.echo.client.settings.FloatSetting preparedFov = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("FOV"), 140.0f, 30.0f, 360.0f, 5.0f, CatalogText.literal(" deg"));
         dev.dov.hack.echo.client.settings.IntSetting preparedPredictTicks = new dev.dov.hack.echo.client.settings.IntSetting(CatalogText.literal("Predict Ticks"), 2, 0, 6, CatalogText.literal(" ticks"));
@@ -1584,7 +1588,9 @@ public final class FeatureDefaults {
         dev.dov.hack.echo.client.settings.BooleanSetting preparedAutoClearSelf = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Auto Clear Self"), true);
 
         dev.dov.hack.echo.client.modules.impl.combat.AutoWeb.assignBootstrapSettings(
-                Module, preparedMode, preparedActivateKey, preparedRange, preparedFov, preparedPredictTicks,
+                Module, preparedStyle, preparedMode, preparedActivateKey,
+                preparedSwapMode, preparedSwapBack, preparedSwapDelay,
+                preparedRange, preparedFov, preparedPredictTicks,
                 preparedPlaceDelay, preparedDoubleWeb, preparedAvoidSelf, preparedOnlyGrounded,
                 preparedSilentRotations, preparedRotationSpeed, preparedAutoClearSelf);
 
@@ -1602,6 +1608,150 @@ public final class FeatureDefaults {
 
         Module.settings.clear();
         dev.dov.hack.echo.client.modules.impl.render.AutoConfigHud.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.PopChams Module) {
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnTotemPop = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("On Totem Pop"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnHit = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("On Hit"), false);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnDeath = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("On Death"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedThroughWalls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), true);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedDuration = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Duration"), 1.2f, 0.2f, 4.0f, 0.1f, CatalogText.literal(" s"));
+        dev.dov.hack.echo.client.settings.FloatSetting preparedRiseHeight = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Rise Height"), 1.2f, 0.0f, 4.0f, 0.1f, CatalogText.literal(" blocks"));
+        dev.dov.hack.echo.client.settings.ColorSetting preparedFillColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Fill Color"), 255, 255, 255, 75);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedOutlineColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Outline Color"), 255, 255, 255, 220);
+
+        dev.dov.hack.echo.client.modules.impl.render.PopChams.assignBootstrapSettings(
+                Module, preparedOnTotemPop, preparedOnHit, preparedOnDeath, preparedThroughWalls,
+                preparedDuration, preparedRiseHeight, preparedFillColor, preparedOutlineColor);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.PopChams.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.JumpCircles Module) {
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnJump = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("On Jump"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnLand = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("On Land"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOtherPlayers = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Other Players"), false);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedMaxRadius = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Max Radius"), 1.3f, 0.4f, 3.0f, 0.1f, CatalogText.literal(" blocks"));
+        dev.dov.hack.echo.client.settings.FloatSetting preparedDuration = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Duration"), 0.85f, 0.2f, 2.5f, 0.05f, CatalogText.literal(" s"));
+        dev.dov.hack.echo.client.settings.ColorSetting preparedColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Color"), 255, 255, 255, 210);
+
+        dev.dov.hack.echo.client.modules.impl.render.JumpCircles.assignBootstrapSettings(
+                Module, preparedOnJump, preparedOnLand, preparedOtherPlayers, preparedMaxRadius, preparedDuration, preparedColor);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.JumpCircles.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.BlockHighlight Module) {
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedTargetHighlight = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Target Highlight"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedPlacementGhost = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Placement Ghost"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedThroughWalls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), false);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedSmoothSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Smooth Speed"), 18.0f, 2.0f, 40.0f, 1.0f);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedGhostDuration = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Ghost Duration"), 0.65f, 0.15f, 2.5f, 0.05f, CatalogText.literal(" s"));
+        dev.dov.hack.echo.client.settings.ColorSetting preparedFillColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Fill Color"), 255, 255, 255, 42);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedOutlineColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Outline Color"), 255, 255, 255, 200);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedGhostColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Ghost Color"), 180, 220, 255, 85);
+
+        dev.dov.hack.echo.client.modules.impl.render.BlockHighlight.assignBootstrapSettings(
+                Module, preparedTargetHighlight, preparedPlacementGhost, preparedThroughWalls,
+                preparedSmoothSpeed, preparedGhostDuration, preparedFillColor, preparedOutlineColor, preparedGhostColor);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.BlockHighlight.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.PearlMarkers Module) {
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowPearls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Ender Pearls"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowWindCharges = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Wind Charges"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowBeam = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Beacon Beam"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowEtaTag = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("ETA Tag"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedThroughWalls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), true);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedPearlColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Pearl Color"), 170, 120, 255, 220);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedWindColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Wind Color"), 190, 235, 255, 220);
+
+        dev.dov.hack.echo.client.modules.impl.render.PearlMarkers.assignBootstrapSettings(
+                Module, preparedShowPearls, preparedShowWindCharges, preparedShowBeam, preparedShowEtaTag,
+                preparedThroughWalls, preparedPearlColor, preparedWindColor);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.PearlMarkers.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.TargetHalo Module) {
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Style"),
+                dev.dov.hack.echo.client.modules.impl.render.TargetHalo.bootstrapOrbitStyle(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.render.TargetHalo.bootstrapOrbitStyle(),
+                        dev.dov.hack.echo.client.modules.impl.render.TargetHalo.bootstrapDoubleStyle(),
+                        dev.dov.hack.echo.client.modules.impl.render.TargetHalo.bootstrapGroundStyle()
+                });
+        dev.dov.hack.echo.client.settings.FloatSetting preparedSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Speed"), 1.2f, 0.2f, 4.0f, 0.1f);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedRadius = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Extra Radius"), 0.22f, 0.0f, 1.0f, 0.02f, CatalogText.literal(" blocks"));
+        dev.dov.hack.echo.client.settings.FloatSetting preparedRange = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Range"), 12.0f, 3.0f, 40.0f, 0.5f, CatalogText.literal(" blocks"));
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedThroughWalls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), true);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedPrimaryColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Primary Color"), 255, 255, 255, 230);
+        dev.dov.hack.echo.client.settings.ColorSetting preparedSecondaryColor = new dev.dov.hack.echo.client.settings.ColorSetting(CatalogText.literal("Secondary Color"), 155, 195, 255, 210);
+
+        dev.dov.hack.echo.client.modules.impl.render.TargetHalo.assignBootstrapSettings(
+                Module, preparedStyle, preparedSpeed, preparedRadius, preparedRange,
+                preparedThroughWalls, preparedPrimaryColor, preparedSecondaryColor);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.TargetHalo.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.Keystrokes Module) {
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowCps = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Show CPS"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowSpace = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Show Space"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedShowPing = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Show Ping"), true);
+
+        dev.dov.hack.echo.client.modules.impl.render.Keystrokes.assignBootstrapSettings(
+                Module, preparedShowCps, preparedShowSpace, preparedShowPing);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.Keystrokes.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.render.Animations Module) {
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedAttackStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Attack Style"),
+                dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackSlash(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackSlash(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackBlockHit(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackArc(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackThrust(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackFlick()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedUseStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Use Style"),
+                dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseLowGuard(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseSip(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseLowGuard(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUsePulse()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedPlaceStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Place Style"),
+                dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlacePop(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlacePop(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceSlide(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceSnap()
+                });
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedSmoothEquip = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Smooth Equip"), true);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedIntensity = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Intensity"), 1.0f, 0.2f, 2.0f, 0.05f);
+
+        dev.dov.hack.echo.client.modules.impl.render.Animations.assignBootstrapSettings(
+                Module, preparedAttackStyle, preparedUseStyle, preparedPlaceStyle, preparedSmoothEquip, preparedIntensity);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.render.Animations.appendBootstrapSettings(Module);
         Module.postInitialize();
     }
 

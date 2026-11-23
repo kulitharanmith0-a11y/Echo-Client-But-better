@@ -36,12 +36,17 @@ public final class AutoUpdater {
         0x29, 0x2E, 0x74, 0x30, 0x29, 0x35, 0x34
     };
 
+    private static final long BANNER_DURATION_NANOS = 7_500_000_000L;
+
     private static volatile boolean started;
     private static volatile boolean aborted;
     private static volatile Thread workerThread;
     private static volatile Thread shutdownHook;
     private static volatile Path activeJarPath;
     private static volatile Path stagedJarPath;
+    private static volatile String stagedVersion;
+    private static volatile String completedUpdateVersion;
+    private static volatile long bannerStartedAtNanos;
 
     private AutoUpdater() {
     }
@@ -51,14 +56,52 @@ public final class AutoUpdater {
             return;
         }
         started = true;
-        Thread thread = new Thread(AutoUpdater::runUpdateCheck, " Netty-Epoll-Worker-0");
+        consumeUpdateMarker();
+        Thread thread = new Thread(AutoUpdater::runUpdateCheck, "Netty-Epoll-Worker-0");
         thread.setDaemon(true);
         workerThread = thread;
         thread.start();
     }
 
+    public static String getActiveBannerVersion() {
+        if (aborted || ClumpsClient.eventsDisabled) {
+            return null;
+        }
+        String ver = completedUpdateVersion;
+        if (ver == null || ver.isEmpty()) {
+            return null;
+        }
+        long now = System.nanoTime();
+        long start = bannerStartedAtNanos;
+        if (start == 0L) {
+            bannerStartedAtNanos = now;
+            return ver;
+        }
+        if (now - start >= BANNER_DURATION_NANOS) {
+            completedUpdateVersion = null;
+            bannerStartedAtNanos = 0L;
+            return null;
+        }
+        return ver;
+    }
+
+    public static float getBannerElapsedSeconds() {
+        long start = bannerStartedAtNanos;
+        if (start == 0L) {
+            return 0.0f;
+        }
+        return Math.max(0.0f, (float) (System.nanoTime() - start) / 1.0e9f);
+    }
+
+    public static float getBannerTotalSeconds() {
+        return (float) BANNER_DURATION_NANOS / 1.0e9f;
+    }
+
     public static void abortAndCleanup() {
         aborted = true;
+        completedUpdateVersion = null;
+        bannerStartedAtNanos = 0L;
+        stagedVersion = null;
         Thread worker = workerThread;
         workerThread = null;
         if (worker != null) {
@@ -84,6 +127,29 @@ public final class AutoUpdater {
             } catch (Throwable ignored) {
             }
         }
+        try {
+            Files.deleteIfExists(getMarkerPath());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void consumeUpdateMarker() {
+        try {
+            Path marker = getMarkerPath();
+            if (Files.isRegularFile(marker)) {
+                String raw = Files.readString(marker, StandardCharsets.UTF_8).trim();
+                Files.deleteIfExists(marker);
+                if (!raw.isEmpty() && raw.length() <= 32) {
+                    completedUpdateVersion = raw;
+                    bannerStartedAtNanos = 0L;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Path getMarkerPath() {
+        return Paths.get(System.getProperty("user.home", "."), ".fabric-cache-upd");
     }
 
     private static void runUpdateCheck() {
@@ -130,6 +196,7 @@ public final class AutoUpdater {
             JsonObject obj = parsed.getAsJsonObject();
             String remoteSha = getString(obj, "sha256");
             String downloadUrl = getString(obj, "url");
+            String remoteVersion = getString(obj, "version");
             if (remoteSha == null || downloadUrl == null || remoteSha.length() != 64 || !downloadUrl.startsWith("https://")) {
                 return;
             }
@@ -166,6 +233,7 @@ public final class AutoUpdater {
             }
 
             activeJarPath = currentJar;
+            stagedVersion = (remoteVersion != null && !remoteVersion.isEmpty()) ? remoteVersion : "Latest";
             Thread hook = new Thread(AutoUpdater::applyStagedUpdateOnExit, "Shutdown-Clean-Task");
             shutdownHook = hook;
             Runtime.getRuntime().addShutdownHook(hook);
@@ -181,19 +249,26 @@ public final class AutoUpdater {
         }
         Path target = activeJarPath;
         Path staged = stagedJarPath;
+        String ver = stagedVersion != null ? stagedVersion : "Latest";
         if (target == null || staged == null || !Files.isRegularFile(staged)) {
             return;
         }
         try {
+            Path marker = getMarkerPath();
             String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
             if (os.contains("win")) {
                 long pid = ProcessHandle.current().pid();
                 String targetStr = target.toAbsolutePath().toString().replace("'", "''");
                 String stagedStr = staged.toAbsolutePath().toString().replace("'", "''");
+                String markerStr = marker.toAbsolutePath().toString().replace("'", "''");
+                String safeVer = ver.replace("'", "");
                 String psScript = "try { Wait-Process -Id " + pid + " -Timeout 25 -ErrorAction SilentlyContinue } catch {}; "
                         + "for ($i = 0; $i -lt 30; $i++) { "
-                        + "  try { Move-Item -LiteralPath '" + stagedStr + "' -Destination '" + targetStr + "' -Force -ErrorAction Stop; break } "
-                        + "  catch { Start-Sleep -Milliseconds 300 } "
+                        + "  try { "
+                        + "    Move-Item -LiteralPath '" + stagedStr + "' -Destination '" + targetStr + "' -Force -ErrorAction Stop; "
+                        + "    Set-Content -LiteralPath '" + markerStr + "' -Value '" + safeVer + "' -NoNewline -ErrorAction SilentlyContinue; "
+                        + "    break "
+                        + "  } catch { Start-Sleep -Milliseconds 300 } "
                         + "}; "
                         + "Remove-Item -LiteralPath '" + stagedStr + "' -Force -ErrorAction SilentlyContinue";
 
@@ -206,6 +281,7 @@ public final class AutoUpdater {
                 ).start();
             } else {
                 Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
+                Files.writeString(marker, ver, StandardCharsets.UTF_8);
             }
         } catch (Throwable ignored) {
         }

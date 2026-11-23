@@ -781,6 +781,8 @@ public final class DashboardController {
             renderConfigModal(renderer);
             renderer.flush();
         }
+        com.blamejared.clumps.client.hud.HudRenderer.INSTANCE.renderAutoUpdateToast(renderer, renderer.fullResolutionBackdrop);
+        renderer.flush();
         ui.endFrame();
         animations.prune(600L);
         if (closing && progress(closingAtNanos, 180) >= 1.0f) {

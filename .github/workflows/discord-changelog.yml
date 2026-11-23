@@ -1,16 +1,23 @@
-name: Discord Release Notification
+name: Discord Changelog & Release Notification
 
 on:
+  push:
+    branches:
+      - main
   release:
     types: [published, edited]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Notification type: 'release' or 'commit'"
+        required: false
+        default: "release"
       version:
-        description: "Version label (leave empty to detect from latest release)"
+        description: "Version label for release notification (leave empty to auto-detect)"
         required: false
         default: ""
       duration:
-        description: "Build duration text (e.g. 4m 16s)"
+        description: "Build duration text for release notification (e.g. 4m 16s)"
         required: false
         default: ""
 
@@ -21,9 +28,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 5
+          fetch-depth: 20
 
-      - name: Post release notification to Discord
+      - name: Post notification to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,6 +40,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.sha }}
+          INPUT_MODE: ${{ github.event.inputs.mode }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_DURATION: ${{ github.event.inputs.duration }}
         run: |
@@ -56,6 +64,7 @@ jobs:
           const serverUrl = process.env.SERVER_URL || "https://github.com";
           const runId = process.env.RUN_ID || "";
           const eventName = process.env.EVENT_NAME || "";
+          const inputMode = (process.env.INPUT_MODE || "release").trim().toLowerCase();
 
           const eventPath = process.env.GITHUB_EVENT_PATH;
           const event = eventPath && fs.existsSync(eventPath)
@@ -108,17 +117,14 @@ jobs:
             const mirrorRepo = `${owner}/clumps-releases`;
             const tagName = (release && release.tag_name) ? release.tag_name : `v${version}`;
 
-            // 1. Download .jar binary from private repo asset endpoint
             const dlHeaders = {
               "Accept": "application/octet-stream",
               "User-Agent": "EchoClient-ReleaseNotifier"
             };
             if (token) dlHeaders["Authorization"] = `Bearer ${token}`;
             const dlRes = await fetch(jarAsset.url, { headers: dlHeaders });
-            if (!dlRes.ok) {
-              console.warn(`Could not download jar asset for mirroring (${dlRes.status}).`);
-              return;
-            }
+            if (!dlRes.ok) return;
+
             const jarBuffer = Buffer.from(await dlRes.arrayBuffer());
             const sha256 = crypto.createHash("sha256").update(jarBuffer).digest("hex");
 
@@ -128,7 +134,6 @@ jobs:
               "User-Agent": "EchoClient-ReleaseNotifier"
             };
 
-            // 2. Ensure release exists on public mirror repo
             let mirrorRelease = null;
             const existingRelRes = await fetch(
               `https://api.github.com/repos/${mirrorRepo}/releases/tags/${encodeURIComponent(tagName)}`,
@@ -152,13 +157,8 @@ jobs:
                 mirrorRelease = await createRelRes.json();
               }
             }
+            if (!mirrorRelease) return;
 
-            if (!mirrorRelease) {
-              console.warn("Could not create or fetch mirror release.");
-              return;
-            }
-
-            // Delete existing asset with same name if re-uploading
             if (Array.isArray(mirrorRelease.assets)) {
               for (const a of mirrorRelease.assets) {
                 if (a && a.name === jarAsset.name) {
@@ -170,7 +170,6 @@ jobs:
               }
             }
 
-            // 3. Upload .jar asset to public mirror release
             const uploadBase = String(mirrorRelease.upload_url || "").replace(/\{\?name,label\}$/, "");
             const uploadUrl = `${uploadBase}?name=${encodeURIComponent(jarAsset.name)}`;
             const upRes = await fetch(uploadUrl, {
@@ -182,13 +181,9 @@ jobs:
               },
               body: jarBuffer
             });
-            if (!upRes.ok) {
-              console.warn(`Mirror asset upload failed (${upRes.status}).`);
-              return;
-            }
+            if (!upRes.ok) return;
             const uploadedAsset = await upRes.json();
 
-            // 4. Update latest.json in public mirror repo
             const latestObj = {
               version,
               sha256,
@@ -211,17 +206,156 @@ jobs:
             };
             if (existingFileSha) putBody.sha = existingFileSha;
 
-            const putRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+            await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
               method: "PUT",
               headers: { ...mHeaders, "Content-Type": "application/json" },
               body: JSON.stringify(putBody)
             });
-            if (putRes.ok) {
-              console.log(`Synced v${version} (${sha256.slice(0, 12)}...) to public mirror ${mirrorRepo}.`);
-            }
           }
 
-          (async () => {
+          async function handleCommitPush() {
+            let targetSha = (process.env.HEAD_SHA || "").trim();
+            let shortSha = targetSha.slice(0, 7);
+            let title = "";
+            let description = "";
+            let visibleCommits = [];
+
+            if (eventName === "push") {
+              const commits = Array.isArray(event.commits) ? event.commits : [];
+              visibleCommits = commits.filter(
+                (c) => c && typeof c.message === "string" && !c.message.includes("[skip-discord]")
+              );
+              if (visibleCommits.length === 0 && event.head_commit && event.head_commit.message) {
+                if (!event.head_commit.message.includes("[skip-discord]")) {
+                  visibleCommits.push(event.head_commit);
+                }
+              }
+            } else {
+              const rawLog = execFileSync(
+                "git",
+                ["log", "-n", "10", "--format=%H%x1f%B%x1e"],
+                { encoding: "utf8" }
+              );
+              const entries = rawLog.split("\x1e").map((s) => s.trim()).filter(Boolean);
+              for (const entry of entries) {
+                const idx = entry.indexOf("\x1f");
+                if (idx === -1) continue;
+                const sha = entry.slice(0, idx).trim();
+                const message = entry.slice(idx + 1).trim();
+                if (!message || message.includes("[skip-discord]")) continue;
+                targetSha = sha;
+                shortSha = sha.slice(0, 7);
+                visibleCommits.push({ message });
+                break;
+              }
+            }
+
+            if (visibleCommits.length === 0) {
+              console.log("No changelog commits to post (skipped).");
+              return;
+            }
+
+            if (visibleCommits.length === 1) {
+              const raw = visibleCommits[0].message.trim();
+              const lines = raw.split(/\r?\n/);
+              const subject = lines[0].trim();
+              const body = lines.slice(1).join("\n").trim();
+              title = subject || "Echo Client Update";
+              description = body || `~ ${subject}`;
+            } else {
+              title = `Echo Client Update (${visibleCommits.length} commits)`;
+              description = visibleCommits
+                .map((c) => {
+                  const lines = c.message.trim().split(/\r?\n/);
+                  const subject = lines[0].trim();
+                  const body = lines.slice(1).join("\n").trim();
+                  return body ? `**~ ${subject}**\n${body}` : `~ ${subject}`;
+                })
+                .join("\n\n");
+            }
+
+            function computeDiffStats() {
+              const zeroSha = /^0+$/;
+              let output = "";
+              try {
+                if (eventName === "push" && event.before && !zeroSha.test(event.before) && event.after) {
+                  output = execFileSync("git", ["diff", "--numstat", `${event.before}..${event.after}`], {
+                    encoding: "utf8"
+                  });
+                } else if (targetSha) {
+                  output = execFileSync("git", ["show", "--numstat", "--format=", targetSha], {
+                    encoding: "utf8"
+                  });
+                }
+              } catch (_) {
+                try {
+                  output = execFileSync("git", ["show", "--numstat", "--format=", "HEAD"], {
+                    encoding: "utf8"
+                  });
+                } catch (__) {
+                  return null;
+                }
+              }
+
+              let files = 0;
+              let added = 0;
+              let removed = 0;
+              for (const line of output.split(/\r?\n/)) {
+                if (!line.trim()) continue;
+                const parts = line.split("\t");
+                if (parts.length < 3) continue;
+                files++;
+                const addVal = parseInt(parts[0], 10);
+                const delVal = parseInt(parts[1], 10);
+                if (!Number.isNaN(addVal)) added += addVal;
+                if (!Number.isNaN(delVal)) removed += delVal;
+              }
+              return { files, added, removed };
+            }
+
+            const stats = computeDiffStats();
+            if (title.length > 256) title = title.slice(0, 253) + "...";
+            if (description.length > 4000) description = description.slice(0, 3997) + "...";
+
+            const fields = [];
+            if (stats && stats.files > 0) {
+              fields.push(
+                { name: "Lines Added", value: `\`+${stats.added.toLocaleString("en-US")}\``, inline: true },
+                { name: "Lines Removed", value: `\`-${stats.removed.toLocaleString("en-US")}\``, inline: true },
+                { name: "Files Changed", value: `\`${stats.files}\``, inline: true }
+              );
+            }
+
+            const payload = {
+              username: "Echo Client",
+              embeds: [
+                {
+                  title,
+                  description,
+                  color: 0x10B981,
+                  fields,
+                  footer: {
+                    text: shortSha ? `Echo Client • ${shortSha}` : "Echo Client"
+                  },
+                  timestamp: new Date().toISOString()
+                }
+              ]
+            };
+
+            const res = await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const text = await res.text();
+              console.error(`Discord commit webhook failed (${res.status}): ${text}`);
+              process.exit(1);
+            }
+            console.log("Posted commit changelog to Discord successfully.", stats);
+          }
+
+          async function handleReleaseJar() {
             let release = event.release || null;
 
             if (!release && repo) {
@@ -236,7 +370,6 @@ jobs:
 
             let jarAsset = findJarAsset(release);
 
-            // When a release is created via API, the .jar asset upload may finish a few seconds after release creation.
             if (!jarAsset && release && release.id && repo && eventName === "release") {
               for (let attempt = 1; attempt <= 18; attempt++) {
                 console.log(`Waiting for .jar asset on release ${release.tag_name} (attempt ${attempt}/18)...`);
@@ -251,17 +384,16 @@ jobs:
             }
 
             if (!jarAsset) {
-              console.log("No .jar asset found on the release. Skipping Discord notification.");
-              process.exit(0);
+              console.log("No .jar asset found on the release. Skipping release notification.");
+              return;
             }
 
-            // If triggered by editing a release, only notify if the .jar asset itself was uploaded/updated recently (within 5 minutes)
             if (eventName === "release" && event.action === "edited") {
               const assetTime = new Date(jarAsset.updated_at || jarAsset.created_at || 0).getTime();
               const ageMs = Date.now() - assetTime;
               if (ageMs > 5 * 60 * 1000) {
                 console.log(`Release edited, but .jar asset (${jarAsset.name}) was not newly uploaded. Skipping.`);
-                process.exit(0);
+                return;
               }
             }
 
@@ -318,7 +450,7 @@ jobs:
               } catch (_) {}
 
               if (!computedSeconds) {
-                computedSeconds = 256; // 4m 16s
+                computedSeconds = 256;
               }
               duration = formatDuration(computedSeconds);
             }
@@ -367,10 +499,18 @@ jobs:
 
             if (!res.ok) {
               const text = await res.text();
-              console.error(`Discord webhook failed (${res.status}): ${text}`);
+              console.error(`Discord release webhook failed (${res.status}): ${text}`);
               process.exit(1);
             }
 
             console.log(`Posted Echo Releases update for version ${version} (${jarAsset.name}) to Discord.`);
+          }
+
+          (async () => {
+            if (eventName === "push" || (eventName === "workflow_dispatch" && inputMode === "commit")) {
+              await handleCommitPush();
+            } else {
+              await handleReleaseJar();
+            }
           })();
           EOF

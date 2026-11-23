@@ -1849,4 +1849,40 @@ public final class FeatureDefaults {
         Module.postInitialize();
     }
 
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.combat.PlateWeb Module) {
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedTrigger = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Trigger"),
+                dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapTriggerSelf(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapTriggerSelf(),
+                        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapTriggerAny()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedSwapMode = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Swap Mode"),
+                dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapSwapLegit(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapSwapLegit(),
+                        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.bootstrapSwapSilent()
+                });
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedSwapBack = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Swap Back"), true);
+        dev.dov.hack.echo.client.settings.IntSetting preparedSwapDelay = new dev.dov.hack.echo.client.settings.IntSetting(
+                CatalogText.literal("Swap Delay"), 1, 0, 5, CatalogText.literal(" ticks"));
+        dev.dov.hack.echo.client.settings.IntSetting preparedPlaceDelay = new dev.dov.hack.echo.client.settings.IntSetting(
+                CatalogText.literal("Place Delay"), 1, 0, 10, CatalogText.literal(" ticks"));
+        dev.dov.hack.echo.client.settings.FloatSetting preparedRange = new dev.dov.hack.echo.client.settings.FloatSetting(
+                CatalogText.literal("Range"), 4.5f, 2.0f, 6.0f, 0.1f);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedSilentRotations = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Silent Rotations"), true);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedRotationSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(
+                CatalogText.literal("Rotation Speed"), 18.0f, 5.0f, 40.0f, 1.0f);
+
+        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.assignBootstrapSettings(
+                Module, preparedTrigger, preparedSwapMode, preparedSwapBack, preparedSwapDelay,
+                preparedPlaceDelay, preparedRange, preparedSilentRotations, preparedRotationSpeed);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.combat.PlateWeb.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
 }

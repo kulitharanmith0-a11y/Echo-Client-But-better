@@ -22,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 10
+          fetch-depth: 20
 
       - name: Post changelog to Discord
         env:
@@ -41,7 +41,6 @@ jobs:
             console.error("DISCORD_WEBHOOK_URL secret is missing or empty.");
             process.exit(1);
           }
-          // Strip /github if pasted from an old GitHub webhook URL
           webhookUrl = webhookUrl.replace(/\/github\/?$/i, "");
 
           const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -50,7 +49,8 @@ jobs:
             : {};
 
           const eventName = process.env.EVENT_NAME || "";
-          let shortSha = (process.env.HEAD_SHA || "").slice(0, 7);
+          let targetSha = (process.env.HEAD_SHA || "").trim();
+          let shortSha = targetSha.slice(0, 7);
           let title = (process.env.INPUT_TITLE || "").trim();
           let description = (process.env.INPUT_CHANGELOG || "").trim();
 
@@ -68,7 +68,6 @@ jobs:
                 }
               }
             } else {
-              // Manual workflow_dispatch: pull the most recent non-skipped commit from git history
               const rawLog = execFileSync(
                 "git",
                 ["log", "-n", "10", "--format=%H%x1f%B%x1e"],
@@ -84,6 +83,7 @@ jobs:
                 const sha = entry.slice(0, idx).trim();
                 const message = entry.slice(idx + 1).trim();
                 if (!message || message.includes("[skip-discord]")) continue;
+                targetSha = sha;
                 shortSha = sha.slice(0, 7);
                 visibleCommits.push({ message });
                 break;
@@ -117,11 +117,62 @@ jobs:
             title = title || "Echo Client Update";
           }
 
+          // Compute exact lines added / removed / files changed via git numstat
+          function computeDiffStats() {
+            const zeroSha = /^0+$/;
+            let output = "";
+            try {
+              if (eventName === "push" && event.before && !zeroSha.test(event.before) && event.after) {
+                output = execFileSync("git", ["diff", "--numstat", `${event.before}..${event.after}`], {
+                  encoding: "utf8"
+                });
+              } else if (targetSha) {
+                output = execFileSync("git", ["show", "--numstat", "--format=", targetSha], {
+                  encoding: "utf8"
+                });
+              }
+            } catch (err) {
+              try {
+                output = execFileSync("git", ["show", "--numstat", "--format=", "HEAD"], {
+                  encoding: "utf8"
+                });
+              } catch (_) {
+                return null;
+              }
+            }
+
+            let files = 0;
+            let added = 0;
+            let removed = 0;
+            for (const line of output.split(/\r?\n/)) {
+              if (!line.trim()) continue;
+              const parts = line.split("\t");
+              if (parts.length < 3) continue;
+              files++;
+              const addVal = parseInt(parts[0], 10);
+              const delVal = parseInt(parts[1], 10);
+              if (!Number.isNaN(addVal)) added += addVal;
+              if (!Number.isNaN(delVal)) removed += delVal;
+            }
+            return { files, added, removed };
+          }
+
+          const stats = computeDiffStats();
+
           if (title.length > 256) {
             title = title.slice(0, 253) + "...";
           }
           if (description.length > 4000) {
             description = description.slice(0, 3997) + "...";
+          }
+
+          const fields = [];
+          if (stats && stats.files > 0) {
+            fields.push(
+              { name: "Lines Added", value: `\`+${stats.added.toLocaleString("en-US")}\``, inline: true },
+              { name: "Lines Removed", value: `\`-${stats.removed.toLocaleString("en-US")}\``, inline: true },
+              { name: "Files Changed", value: `\`${stats.files}\``, inline: true }
+            );
           }
 
           const payload = {
@@ -131,6 +182,7 @@ jobs:
                 title,
                 description,
                 color: 0x10B981,
+                fields,
                 footer: {
                   text: shortSha ? `Echo Client • ${shortSha}` : "Echo Client"
                 },
@@ -150,6 +202,6 @@ jobs:
               console.error(`Discord webhook failed (${res.status}): ${text}`);
               process.exit(1);
             }
-            console.log("Posted changelog to Discord successfully.");
+            console.log("Posted changelog to Discord successfully.", stats);
           })();
           EOF

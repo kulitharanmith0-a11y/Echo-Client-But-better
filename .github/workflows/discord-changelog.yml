@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       title:
-        description: "Update title (e.g. ECHO CLIENT UPDATE v1.0)"
+        description: "Update title (leave empty to use the latest commit)"
         required: false
         default: ""
       changelog:
-        description: "Custom changelog text (leave empty to post the latest commit)"
+        description: "Custom changelog text (leave empty to use the latest commit)"
         required: false
         default: ""
 
@@ -19,6 +19,11 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
       - name: Post changelog to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -29,11 +34,12 @@ jobs:
         run: |
           node <<'EOF'
           const fs = require("fs");
+          const { execFileSync } = require("child_process");
 
           let webhookUrl = (process.env.DISCORD_WEBHOOK_URL || "").trim();
           if (!webhookUrl) {
-            console.log("DISCORD_WEBHOOK_URL secret is not set; skipping Discord notification.");
-            process.exit(0);
+            console.error("DISCORD_WEBHOOK_URL secret is missing or empty.");
+            process.exit(1);
           }
           // Strip /github if pasted from an old GitHub webhook URL
           webhookUrl = webhookUrl.replace(/\/github\/?$/i, "");
@@ -43,24 +49,49 @@ jobs:
             ? JSON.parse(fs.readFileSync(eventPath, "utf8"))
             : {};
 
-          const shortSha = (process.env.HEAD_SHA || "").slice(0, 7);
+          const eventName = process.env.EVENT_NAME || "";
+          let shortSha = (process.env.HEAD_SHA || "").slice(0, 7);
           let title = (process.env.INPUT_TITLE || "").trim();
           let description = (process.env.INPUT_CHANGELOG || "").trim();
 
           if (!description) {
-            const commits = Array.isArray(event.commits) ? event.commits : [];
-            const visibleCommits = commits.filter(
-              (c) => c && typeof c.message === "string" && !c.message.includes("[skip-discord]")
-            );
+            let visibleCommits = [];
 
-            if (visibleCommits.length === 0 && event.head_commit && event.head_commit.message) {
-              if (!event.head_commit.message.includes("[skip-discord]")) {
-                visibleCommits.push(event.head_commit);
+            if (eventName === "push") {
+              const commits = Array.isArray(event.commits) ? event.commits : [];
+              visibleCommits = commits.filter(
+                (c) => c && typeof c.message === "string" && !c.message.includes("[skip-discord]")
+              );
+              if (visibleCommits.length === 0 && event.head_commit && event.head_commit.message) {
+                if (!event.head_commit.message.includes("[skip-discord]")) {
+                  visibleCommits.push(event.head_commit);
+                }
+              }
+            } else {
+              // Manual workflow_dispatch: pull the most recent non-skipped commit from git history
+              const rawLog = execFileSync(
+                "git",
+                ["log", "-n", "10", "--format=%H%x1f%B%x1e"],
+                { encoding: "utf8" }
+              );
+              const entries = rawLog
+                .split("\x1e")
+                .map((s) => s.trim())
+                .filter(Boolean);
+              for (const entry of entries) {
+                const idx = entry.indexOf("\x1f");
+                if (idx === -1) continue;
+                const sha = entry.slice(0, idx).trim();
+                const message = entry.slice(idx + 1).trim();
+                if (!message || message.includes("[skip-discord]")) continue;
+                shortSha = sha.slice(0, 7);
+                visibleCommits.push({ message });
+                break;
               }
             }
 
             if (visibleCommits.length === 0) {
-              console.log("No changelog commits to post.");
+              console.log("No changelog commits to post (skipped).");
               process.exit(0);
             }
 

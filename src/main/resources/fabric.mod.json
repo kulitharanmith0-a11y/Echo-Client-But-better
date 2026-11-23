@@ -11,15 +11,15 @@
   "environment": "*",
   "entrypoints": {
     "preLaunch": [
-      "dev.dov.hack.echo.client.PreLaunch"
+      "com.blamejared.clumps.client.PreLaunch"
     ],
     "main": [
-      "dev.dov.hack.echo.client.init.Initializer"
+      "com.blamejared.clumps.client.init.Initializer"
     ]
   },
   "mixins": [
-    "echo.mixins.json",
-    "echo-render.mixins.json"
+    "clumps.mixins.json",
+    "clumps-render.mixins.json"
   ],
   "depends": {
     "minecraft": "1.21.11",

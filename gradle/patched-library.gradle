@@ -2,7 +2,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 apply plugin: 'java-library'
-group = 'echo.clean.thirdparty'
+group = 'com.blamejared.clumps.lib'
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
@@ -61,7 +61,7 @@ tasks.named('jar', Jar) {
     }
     manifest.attributes('Implementation-Title': "${upstreamCoordinate} with readable local URL guards",
             'Implementation-Version': project.version,
-            'Echo-Patch-Source': 'seven ordinary Java sources; no classfile rewriting')
+            'Patch-Source': 'seven ordinary Java sources; no classfile rewriting')
 }
 
 // Make all upstream source editable in the published source archive, replacing

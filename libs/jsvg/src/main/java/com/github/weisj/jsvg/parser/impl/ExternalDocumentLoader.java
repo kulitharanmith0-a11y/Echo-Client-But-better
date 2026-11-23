@@ -71,7 +71,7 @@ class ExternalDocumentLoader implements DefaultElementLoader.DocumentLoader {
                 cache.put(documentUri, cachedDocument);
             }
 
-            echo$offlineLocalUrl(documentUrl);
+            clumps$offlineLocalUrl(documentUrl);
             try (InputStream is = StreamUtil.createDocumentInputStream(documentUrl.openStream())) {
                 SVGDocumentBuilder builder = new StaxSVGLoader().parse(
                         is, documentUri, document.loaderContext());
@@ -92,8 +92,8 @@ class ExternalDocumentLoader implements DefaultElementLoader.DocumentLoader {
         }
     }
 
-    /** Recovered Echo offline URL check; the embedded method has ACC_SYNTHETIC. */
-    private static void echo$offlineLocalUrl(URL url) throws IOException {
+    /** Offline URL check; the embedded method has ACC_SYNTHETIC. */
+    private static void clumps$offlineLocalUrl(URL url) throws IOException {
         for (int depth = 0; depth < 8; depth++) {
             String protocol = url.getProtocol();
             if ("file".equalsIgnoreCase(protocol)) {
@@ -116,7 +116,7 @@ class ExternalDocumentLoader implements DefaultElementLoader.DocumentLoader {
             if (separator < 0) break;
             url = new URL(archive.substring(0, separator));
         }
-        throw new IOException("Remote resources are unavailable in Echo offline mode");
+        throw new IOException("Remote resources are unavailable in offline mode");
     }
 
     private static final class CachedDocument {

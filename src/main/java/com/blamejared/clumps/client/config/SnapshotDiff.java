@@ -1,0 +1,14 @@
+package com.blamejared.clumps.client.config;
+
+import com.blamejared.clumps.client.modules.ModuleCategory;
+import java.util.Objects;
+import java.util.Optional;
+
+public record SnapshotDiff(String id, CharSequence name, ModuleCategory moduleCategory, Optional<String> keyLabel, boolean pressed) {
+    
+    public SnapshotDiff {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(keyLabel, "keyLabel");
+    }
+}

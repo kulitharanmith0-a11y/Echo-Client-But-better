@@ -9,7 +9,7 @@ plugins {
     id 'java'
 }
 
-group = 'dev.dov.hack'
+group = 'com.blamejared.clumps'
 version = providers.gradleProperty('mod_version').get()
 description = 'Clumps'
 

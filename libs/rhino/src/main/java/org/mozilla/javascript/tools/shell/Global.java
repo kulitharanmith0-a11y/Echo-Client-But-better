@@ -1006,7 +1006,7 @@ public class Global extends ImporterTopLevel {
         try {
             if (!urlIsFile) {
                 URL urlObj = new URL(filePath);
-                echo$offlineLocalUrl(urlObj);
+                clumps$offlineLocalUrl(urlObj);
                 URLConnection uc = urlObj.openConnection();
                 is = uc.getInputStream();
                 chunkLength = uc.getContentLength();
@@ -1120,8 +1120,8 @@ public class Global extends ImporterTopLevel {
         return new String(buffer, 0, offset);
     }
 
-    /** Recovered Echo offline URL check; the embedded method has ACC_SYNTHETIC. */
-    private static void echo$offlineLocalUrl(URL url) throws IOException {
+    /** Offline URL check; the embedded method has ACC_SYNTHETIC. */
+    private static void clumps$offlineLocalUrl(URL url) throws IOException {
         for (int depth = 0; depth < 8; depth++) {
             String protocol = url.getProtocol();
             if ("file".equalsIgnoreCase(protocol)) {
@@ -1144,7 +1144,7 @@ public class Global extends ImporterTopLevel {
             if (separator < 0) break;
             url = new URL(archive.substring(0, separator));
         }
-        throw new IOException("Remote resources are unavailable in Echo offline mode");
+        throw new IOException("Remote resources are unavailable in offline mode");
     }
 
     static RuntimeException reportRuntimeError(String msgId) {

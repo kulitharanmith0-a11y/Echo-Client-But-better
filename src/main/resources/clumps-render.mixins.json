@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8.7",
+  "package": "com.blamejared.clumps.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MinecraftLegacyDialogMixin",
+    "NarratorLegacyDialogMixin",
+    "WindowLegacyDialogMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}

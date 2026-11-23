@@ -51,7 +51,7 @@ public final class SVGLoader {
     public @Nullable SVGDocument load(@NotNull URL xmlBase, @NotNull LoaderContext loaderContext) {
         try {
             URI uri = xmlBase.toURI();
-            echo$offlineLocalUrl(xmlBase);
+            clumps$offlineLocalUrl(xmlBase);
             return load(xmlBase.openStream(), uri, loaderContext);
         } catch (URISyntaxException | IOException e) {
             LOGGER.log(Level.WARNING, String.format("Could not read %s", xmlBase), e);
@@ -95,8 +95,8 @@ public final class SVGLoader {
         return null;
     }
 
-    /** Recovered Echo offline URL check; the embedded method has ACC_SYNTHETIC. */
-    private static void echo$offlineLocalUrl(URL url) throws IOException {
+    /** Offline URL check; the embedded method has ACC_SYNTHETIC. */
+    private static void clumps$offlineLocalUrl(URL url) throws IOException {
         for (int depth = 0; depth < 8; depth++) {
             String protocol = url.getProtocol();
             if ("file".equalsIgnoreCase(protocol)) {
@@ -119,6 +119,6 @@ public final class SVGLoader {
             if (separator < 0) break;
             url = new URL(archive.substring(0, separator));
         }
-        throw new IOException("Remote resources are unavailable in Echo offline mode");
+        throw new IOException("Remote resources are unavailable in offline mode");
     }
 }

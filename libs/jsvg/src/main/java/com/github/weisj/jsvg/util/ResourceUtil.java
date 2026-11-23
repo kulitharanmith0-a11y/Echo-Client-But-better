@@ -97,12 +97,12 @@ public final class ResourceUtil {
             }
         }
         URL url = uri.toURL();
-        echo$offlineLocalUrl(url);
+        clumps$offlineLocalUrl(url);
         return ImageIO.read(url);
     }
 
-    /** Recovered Echo offline URL check; the embedded method has ACC_SYNTHETIC. */
-    private static void echo$offlineLocalUrl(URL url) throws IOException {
+    /** Offline URL check; the embedded method has ACC_SYNTHETIC. */
+    private static void clumps$offlineLocalUrl(URL url) throws IOException {
         for (int depth = 0; depth < 8; depth++) {
             String protocol = url.getProtocol();
             if ("file".equalsIgnoreCase(protocol)) {
@@ -125,7 +125,7 @@ public final class ResourceUtil {
             if (separator < 0) break;
             url = new URL(archive.substring(0, separator));
         }
-        throw new IOException("Remote resources are unavailable in Echo offline mode");
+        throw new IOException("Remote resources are unavailable in offline mode");
     }
 
     private static boolean isSupportedMimeType(@NotNull String mimeType) {

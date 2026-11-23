@@ -27,6 +27,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIRROR_PAT: ${{ secrets.MIRROR_PAT }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}
@@ -37,6 +38,7 @@ jobs:
         run: |
           node <<'EOF'
           const fs = require("fs");
+          const crypto = require("crypto");
           const { execFileSync } = require("child_process");
 
           const ECHO_BLUE_ICON_BASE64 =
@@ -98,6 +100,127 @@ jobs:
             return mins > 0 ? `${mins}m ${rem}s` : `${rem}s`;
           }
 
+          async function syncPublicMirror(release, jarAsset, version) {
+            const mirrorPat = (process.env.MIRROR_PAT || "").trim();
+            if (!mirrorPat || !jarAsset || !jarAsset.url) return;
+
+            const owner = (repo.split("/")[0] || "kulitharanmith0-a11y").trim();
+            const mirrorRepo = `${owner}/clumps-releases`;
+            const tagName = (release && release.tag_name) ? release.tag_name : `v${version}`;
+
+            // 1. Download .jar binary from private repo asset endpoint
+            const dlHeaders = {
+              "Accept": "application/octet-stream",
+              "User-Agent": "EchoClient-ReleaseNotifier"
+            };
+            if (token) dlHeaders["Authorization"] = `Bearer ${token}`;
+            const dlRes = await fetch(jarAsset.url, { headers: dlHeaders });
+            if (!dlRes.ok) {
+              console.warn(`Could not download jar asset for mirroring (${dlRes.status}).`);
+              return;
+            }
+            const jarBuffer = Buffer.from(await dlRes.arrayBuffer());
+            const sha256 = crypto.createHash("sha256").update(jarBuffer).digest("hex");
+
+            const mHeaders = {
+              "Authorization": `Bearer ${mirrorPat}`,
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "EchoClient-ReleaseNotifier"
+            };
+
+            // 2. Ensure release exists on public mirror repo
+            let mirrorRelease = null;
+            const existingRelRes = await fetch(
+              `https://api.github.com/repos/${mirrorRepo}/releases/tags/${encodeURIComponent(tagName)}`,
+              { headers: mHeaders }
+            );
+            if (existingRelRes.ok) {
+              mirrorRelease = await existingRelRes.json();
+            } else {
+              const createRelRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/releases`, {
+                method: "POST",
+                headers: { ...mHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  tag_name: tagName,
+                  name: `v${version}`,
+                  body: `Release v${version}`,
+                  draft: false,
+                  prerelease: false
+                })
+              });
+              if (createRelRes.ok) {
+                mirrorRelease = await createRelRes.json();
+              }
+            }
+
+            if (!mirrorRelease) {
+              console.warn("Could not create or fetch mirror release.");
+              return;
+            }
+
+            // Delete existing asset with same name if re-uploading
+            if (Array.isArray(mirrorRelease.assets)) {
+              for (const a of mirrorRelease.assets) {
+                if (a && a.name === jarAsset.name) {
+                  await fetch(`https://api.github.com/repos/${mirrorRepo}/releases/assets/${a.id}`, {
+                    method: "DELETE",
+                    headers: mHeaders
+                  });
+                }
+              }
+            }
+
+            // 3. Upload .jar asset to public mirror release
+            const uploadBase = String(mirrorRelease.upload_url || "").replace(/\{\?name,label\}$/, "");
+            const uploadUrl = `${uploadBase}?name=${encodeURIComponent(jarAsset.name)}`;
+            const upRes = await fetch(uploadUrl, {
+              method: "POST",
+              headers: {
+                ...mHeaders,
+                "Content-Type": "application/java-archive",
+                "Content-Length": String(jarBuffer.length)
+              },
+              body: jarBuffer
+            });
+            if (!upRes.ok) {
+              console.warn(`Mirror asset upload failed (${upRes.status}).`);
+              return;
+            }
+            const uploadedAsset = await upRes.json();
+
+            // 4. Update latest.json in public mirror repo
+            const latestObj = {
+              version,
+              sha256,
+              url: uploadedAsset.browser_download_url
+            };
+            const contentB64 = Buffer.from(JSON.stringify(latestObj, null, 2) + "\n", "utf8").toString("base64");
+
+            let existingFileSha = undefined;
+            const fileRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+              headers: mHeaders
+            });
+            if (fileRes.ok) {
+              const fileJson = await fileRes.json();
+              existingFileSha = fileJson.sha;
+            }
+
+            const putBody = {
+              message: `Update latest.json for v${version}`,
+              content: contentB64
+            };
+            if (existingFileSha) putBody.sha = existingFileSha;
+
+            const putRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+              method: "PUT",
+              headers: { ...mHeaders, "Content-Type": "application/json" },
+              body: JSON.stringify(putBody)
+            });
+            if (putRes.ok) {
+              console.log(`Synced v${version} (${sha256.slice(0, 12)}...) to public mirror ${mirrorRepo}.`);
+            }
+          }
+
           (async () => {
             let release = event.release || null;
 
@@ -145,6 +268,12 @@ jobs:
             let version = (process.env.INPUT_VERSION || "").trim();
             if (!version) {
               version = cleanVersion((release && (release.tag_name || release.name)) || "3.1");
+            }
+
+            try {
+              await syncPublicMirror(release, jarAsset, version);
+            } catch (mirrorErr) {
+              console.warn("Mirror sync warning:", mirrorErr);
             }
 
             let targetSha = "";

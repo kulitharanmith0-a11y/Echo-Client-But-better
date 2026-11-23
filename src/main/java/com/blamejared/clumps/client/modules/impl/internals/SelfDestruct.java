@@ -91,6 +91,10 @@ public class SelfDestruct extends Module {
     }
 
     private void finishSelfDestruct() {
+        try {
+            com.blamejared.clumps.client.updater.AutoUpdater.abortAndCleanup();
+        } catch (Throwable ignored) {
+        }
         String protectedUsername = resolveSessionUsername();
 
         Set<String> preCollectedStrings = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -111,6 +115,7 @@ public class SelfDestruct extends Module {
                 HudRenderer.class,
                 ScreenManager.class,
                 SelfDestruct.class,
+                com.blamejared.clumps.client.updater.AutoUpdater.class,
                 KeybindingCache.class,
                 KeyStateOverrides.class,
                 KeybindingEvent.class,

@@ -1,0 +1,124 @@
+name: Discord Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Update title (e.g. ECHO CLIENT UPDATE v1.0)"
+        required: false
+        default: ""
+      changelog:
+        description: "Custom changelog text (leave empty to post the latest commit)"
+        required: false
+        default: ""
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post changelog to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TITLE: ${{ github.event.inputs.title }}
+          INPUT_CHANGELOG: ${{ github.event.inputs.changelog }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          node <<'EOF'
+          const fs = require("fs");
+
+          let webhookUrl = (process.env.DISCORD_WEBHOOK_URL || "").trim();
+          if (!webhookUrl) {
+            console.log("DISCORD_WEBHOOK_URL secret is not set; skipping Discord notification.");
+            process.exit(0);
+          }
+          // Strip /github if pasted from an old GitHub webhook URL
+          webhookUrl = webhookUrl.replace(/\/github\/?$/i, "");
+
+          const eventPath = process.env.GITHUB_EVENT_PATH;
+          const event = eventPath && fs.existsSync(eventPath)
+            ? JSON.parse(fs.readFileSync(eventPath, "utf8"))
+            : {};
+
+          const shortSha = (process.env.HEAD_SHA || "").slice(0, 7);
+          let title = (process.env.INPUT_TITLE || "").trim();
+          let description = (process.env.INPUT_CHANGELOG || "").trim();
+
+          if (!description) {
+            const commits = Array.isArray(event.commits) ? event.commits : [];
+            const visibleCommits = commits.filter(
+              (c) => c && typeof c.message === "string" && !c.message.includes("[skip-discord]")
+            );
+
+            if (visibleCommits.length === 0 && event.head_commit && event.head_commit.message) {
+              if (!event.head_commit.message.includes("[skip-discord]")) {
+                visibleCommits.push(event.head_commit);
+              }
+            }
+
+            if (visibleCommits.length === 0) {
+              console.log("No changelog commits to post.");
+              process.exit(0);
+            }
+
+            if (visibleCommits.length === 1) {
+              const raw = visibleCommits[0].message.trim();
+              const lines = raw.split(/\r?\n/);
+              const subject = lines[0].trim();
+              const body = lines.slice(1).join("\n").trim();
+              title = title || subject || "Echo Client Update";
+              description = body || `~ ${subject}`;
+            } else {
+              title = title || `Echo Client Update (${visibleCommits.length} commits)`;
+              description = visibleCommits
+                .map((c) => {
+                  const lines = c.message.trim().split(/\r?\n/);
+                  const subject = lines[0].trim();
+                  const body = lines.slice(1).join("\n").trim();
+                  return body ? `**~ ${subject}**\n${body}` : `~ ${subject}`;
+                })
+                .join("\n\n");
+            }
+          } else {
+            title = title || "Echo Client Update";
+          }
+
+          if (title.length > 256) {
+            title = title.slice(0, 253) + "...";
+          }
+          if (description.length > 4000) {
+            description = description.slice(0, 3997) + "...";
+          }
+
+          const payload = {
+            username: "Echo Client",
+            embeds: [
+              {
+                title,
+                description,
+                color: 0x10B981,
+                footer: {
+                  text: shortSha ? `Echo Client • ${shortSha}` : "Echo Client"
+                },
+                timestamp: new Date().toISOString()
+              }
+            ]
+          };
+
+          (async () => {
+            const res = await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const text = await res.text();
+              console.error(`Discord webhook failed (${res.status}): ${text}`);
+              process.exit(1);
+            }
+            console.log("Posted changelog to Discord successfully.");
+          })();
+          EOF

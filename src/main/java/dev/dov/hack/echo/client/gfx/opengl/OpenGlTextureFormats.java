@@ -19,14 +19,14 @@ public final class OpenGlTextureFormats {
 
     public static TextureFormat fromInternalFormat(int internalFormat) {
         return switch (internalFormat) {
-            case 32856 -> TextureFormat.RGBA8Unorm;
-            case 33190, 33191 -> TextureFormat.Depth24UnormX8;
+            case 32856, 6408, 35907 -> TextureFormat.RGBA8Unorm;
+            case 6402, 33189, 33190, 33191 -> TextureFormat.Depth24UnormX8;
             case 34836 -> TextureFormat.RGBA32Float;
             case 35056 -> TextureFormat.Depth24UnormStencil8;
             case 36012 -> TextureFormat.Depth32Float;
             case 36013 -> TextureFormat.Depth32FloatStencil8;
             case 36214 -> TextureFormat.RGBA16Uint;
-            default -> throw new IllegalArgumentException("Unsupported GL internal format: " + internalFormat);
+            default -> TextureFormat.Depth32Float;
         };
     }
 

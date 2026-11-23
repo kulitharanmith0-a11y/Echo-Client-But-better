@@ -93,7 +93,7 @@ public final class ClientStringCleanup {
         }
         for (Class<?> type : classesToVisit) {
             if (type != null && !type.isInterface() && !type.isAnnotation() && !type.isEnum()
-                    && belongsToApplication(type)) {
+                    && belongsToApplication(type) && !isRuntimeProtectedClass(type)) {
                 collectFields(type, null, memory, seenClasses, actions, queue, heapStrings, literalStrings);
             }
         }
@@ -150,27 +150,13 @@ public final class ClientStringCleanup {
             Collection<String> heapStrings,
             Collection<String> literalStrings,
             String protectedUsername) {
-        StringMemoryAccess memory = StringMemoryAccess.create();
-        if (memory == null) {
-            return;
-        }
-        if (heapStrings != null) {
-            for (String string : heapStrings) {
-                if (isSafeToZeroString(string, true, protectedUsername)) {
-                    memory.clearString(string);
-                }
-            }
-        }
-        if (literalStrings != null) {
-            for (String string : literalStrings) {
-                if (isSafeToZeroString(string, false, protectedUsername)) {
-                    memory.clearString(string);
-                }
-            }
-        }
+        // Mutating java.lang.String backing arrays in-place via Unsafe corrupts JVM
+        // interned string tables, hash maps, and Minecraft/Fabric constants on Java 21+.
+        // Mutable client buffers (StringBuilder/StringBuffer/char[]) and non-final client
+        // field references are already cleared safely through CleanupPlan.actions().
     }
 
-    private static void collectFields(
+    private void collectFields(
             Class<?> type,
             Object object,
             StringMemoryAccess memory,
@@ -197,6 +183,9 @@ public final class ClientStringCleanup {
             if (!isStatic && object == null) {
                 continue;
             }
+            if (isStatic && Modifier.isFinal(field.getModifiers())) {
+                continue;
+            }
             if (isProtectedField(type, field, isStatic)) {
                 continue;
             }
@@ -205,10 +194,22 @@ public final class ClientStringCleanup {
             if (value == null) {
                 continue;
             }
+            String valueTypeName = value.getClass().getName();
+            if (valueTypeName.startsWith("net.minecraft.")
+                    || valueTypeName.startsWith("com.mojang.")
+                    || valueTypeName.startsWith("net.fabricmc.")
+                    || valueTypeName.startsWith("org.lwjgl.")) {
+                if (!Modifier.isFinal(field.getModifiers())) {
+                    actions.add(() -> memory.clearReference(field, owner));
+                }
+                continue;
+            }
             boolean knownHeap = isHeapOwnedStringSource(type, owner, isStatic);
             if (value instanceof String text) {
                 (knownHeap ? heapStrings : literalStrings).add(text);
-                actions.add(() -> memory.clearReference(field, owner));
+                if (!Modifier.isFinal(field.getModifiers())) {
+                    actions.add(() -> memory.clearReference(field, owner));
+                }
                 continue;
             }
             if (value instanceof Enum<?>) {
@@ -217,8 +218,13 @@ public final class ClientStringCleanup {
                 }
                 continue;
             }
-            enqueue(queue, value, knownHeap);
-            if (shouldClearReference(type, owner, field, isStatic, value)) {
+            if (belongsToApplication(value.getClass())
+                    || value instanceof StringBuilder
+                    || value instanceof StringBuffer
+                    || (knownHeap && (value instanceof Collection<?> || value instanceof Map<?, ?> || value.getClass().isArray()))) {
+                enqueue(queue, value, knownHeap);
+            }
+            if (!Modifier.isFinal(field.getModifiers()) && shouldClearReference(type, owner, field, isStatic, value)) {
                 actions.add(() -> memory.clearReference(field, owner));
             }
         }
@@ -246,6 +252,24 @@ public final class ClientStringCleanup {
         return owner == DashboardController.INSTANCE
                 || owner == HudRenderer.INSTANCE
                 || owner instanceof ImmediateUiContext;
+    }
+
+    private static boolean isRuntimeProtectedClass(Class<?> type) {
+        if (type == null) {
+            return true;
+        }
+        String name = type.getName();
+        return name.contains(".mixin.")
+                || name.contains(".event.")
+                || name.contains(".keyboard.")
+                || name.contains(".platform.")
+                || name.contains(".gfx.")
+                || name.contains(".render.")
+                || name.contains(".natives.")
+                || type == EchoClient.class
+                || type == SelfDestruct.class
+                || type == ClientStringCleanup.class
+                || type == StringMemoryAccess.class;
     }
 
     private static boolean isProtectedField(Class<?> type, Field field, boolean isStatic) {

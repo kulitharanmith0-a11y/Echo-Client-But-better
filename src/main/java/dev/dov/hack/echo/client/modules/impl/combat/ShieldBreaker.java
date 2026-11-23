@@ -20,8 +20,10 @@ import dev.dov.hack.echo.client.settings.BooleanSetting;
 import dev.dov.hack.echo.client.settings.ChoiceSetting;
 import dev.dov.hack.echo.client.settings.FloatRangeSetting;
 import dev.dov.hack.echo.client.settings.HotbarSlotsSetting;
+import dev.dov.hack.echo.client.settings.IntSetting;
 import dev.dov.hack.echo.client.settings.ItemListSetting;
 import dev.dov.hack.echo.client.utils.CooldownTimer;
+import dev.dov.hack.echo.client.utils.MathRng;
 import dev.dov.hack.echo.client.utils.interaction.EntityInteractions;
 import dev.dov.hack.echo.client.utils.items.InventoryItems;
 import dev.dov.hack.echo.client.utils.targeting.EntityPredicates;
@@ -46,6 +48,7 @@ public class ShieldBreaker extends Module {
     public static ItemListSetting returnItems;
     public static BooleanSetting unblockOwnShield;
     public static BooleanSetting stun;
+    public static IntSetting stunChance;
     public static ItemListSetting itemWhitelist;
     public static HotbarSlotsSetting hotbarWhitelist;
     private CooldownTimer attackTimer;
@@ -88,6 +91,9 @@ public class ShieldBreaker extends Module {
         returnTo.setVisibilityPredicate(ignored -> usesReturnSelection());
         returnSlots.setVisibilityPredicate(ignored -> usesReturnSelection() && returnTo.isSelected(returnToOption2));
         returnItems.setVisibilityPredicate(ignored -> usesReturnSelection() && returnTo.isSelected(returnToOption3));
+        stunChance.setVisibilityPredicate(ignored -> stun.getValue());
+        stunChance.description(literal("Percentage chance to follow up with a stun hit after breaking a shield"));
+        stunChance.tooltip("Timing");
         if (reactionSection == null) reactionSection = "Timing";
         reactionDelay.tooltip(reactionSection);
         if (attackSection == null) attackSection = "Timing";
@@ -245,9 +251,16 @@ public class ShieldBreaker extends Module {
     private void addShieldAttack(AttackKeyEvent event, PlayerEntity target) {
         if (!event.hasClicks() && !actions().requestAttackClick(this, event)) return;
         Targets.currentTarget = target;
-        if (stun.getValue()) previousShieldTarget = target;
+        if (stun.getValue() && passesStunChance()) previousShieldTarget = target;
         attackDelayActive = true;
         switchTimer.reset();
+    }
+
+    private boolean passesStunChance() {
+        int chance = stunChance != null ? stunChance.getValue() : 100;
+        if (chance >= 100) return true;
+        if (chance <= 0) return false;
+        return MathRng.randomInt(1, 101) <= chance;
     }
 
     private PlayerEntity findShieldTarget() {
@@ -346,6 +359,7 @@ public class ShieldBreaker extends Module {
         CatalogSettings.append(Module, returnItems);
         CatalogSettings.append(Module, unblockOwnShield);
         CatalogSettings.append(Module, stun);
+        CatalogSettings.append(Module, stunChance);
         CatalogSettings.append(Module, itemWhitelist);
         CatalogSettings.append(Module, hotbarWhitelist);
     }
@@ -356,7 +370,7 @@ public class ShieldBreaker extends Module {
     public static CharSequence bootstrapModeOption2() { return modeOption2; }
     public static CharSequence bootstrapModeOption() { return modeOption; }
 
-    public static void assignBootstrapSettings(ShieldBreaker Module, BooleanSetting preparedUnblockOwnShield, HotbarSlotsSetting preparedHotbarWhitelist, HotbarSlotsSetting preparedReturnSlots, BooleanSetting preparedSwapBack, ChoiceSetting preparedReturnTo, ChoiceSetting preparedMode, FloatRangeSetting preparedAttackDelay, BooleanSetting preparedAutoSwap, FloatRangeSetting preparedReactionDelay, ItemListSetting preparedReturnItems, BooleanSetting preparedStun, FloatRangeSetting preparedSwapBackDelay, ItemListSetting preparedItemWhitelist) {
+    public static void assignBootstrapSettings(ShieldBreaker Module, BooleanSetting preparedUnblockOwnShield, HotbarSlotsSetting preparedHotbarWhitelist, HotbarSlotsSetting preparedReturnSlots, BooleanSetting preparedSwapBack, ChoiceSetting preparedReturnTo, ChoiceSetting preparedMode, FloatRangeSetting preparedAttackDelay, BooleanSetting preparedAutoSwap, FloatRangeSetting preparedReactionDelay, ItemListSetting preparedReturnItems, BooleanSetting preparedStun, IntSetting preparedStunChance, FloatRangeSetting preparedSwapBackDelay, ItemListSetting preparedItemWhitelist) {
         unblockOwnShield = preparedUnblockOwnShield;
         hotbarWhitelist = preparedHotbarWhitelist;
         returnSlots = preparedReturnSlots;
@@ -368,6 +382,7 @@ public class ShieldBreaker extends Module {
         reactionDelay = preparedReactionDelay;
         returnItems = preparedReturnItems;
         stun = preparedStun;
+        stunChance = preparedStunChance;
         swapBackDelay = preparedSwapBackDelay;
         itemWhitelist = preparedItemWhitelist;
     }

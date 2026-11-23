@@ -37,21 +37,37 @@ public final class SvgTextureCache implements AutoCloseable {
     }
 
     public TextureView getOrSchedule(String resourcePath, int width, int height, SvgColorMode mode) {
-        SvgTextureKey key = new SvgTextureKey(resourcePath, Math.max(1, width), Math.max(1, height), mode);
+        int safeWidth = Math.max(1, Math.min(1024, width));
+        int safeHeight = Math.max(1, Math.min(1024, height));
+        SvgTextureKey key = new SvgTextureKey(resourcePath, safeWidth, safeHeight, mode);
         TextureView texture = textures.get(key);
         if (texture != null) {
             return texture;
         }
-        CompletableFuture<ByteBuffer> task = pending.computeIfAbsent(key, this::rasterizeAsync);
-        if (!task.isDone() || task.isCompletedExceptionally()) {
+        if (rasterThread.isShutdown()) {
             return null;
         }
-        ByteBuffer pixels = task.join();
+        CompletableFuture<ByteBuffer> task = pending.computeIfAbsent(key, this::rasterizeAsync);
+        if (!task.isDone() || task.isCompletedExceptionally() || task.isCancelled()) {
+            return null;
+        }
+        ByteBuffer pixels;
+        try {
+            pixels = task.join();
+        } catch (Throwable ignored) {
+            pending.remove(key);
+            return null;
+        }
         pending.remove(key);
+        if (pixels == null) {
+            return null;
+        }
         try {
             texture = ImageDecoder.uploadRgba(device, pixels, key.width(), key.height());
             textures.put(key, texture);
             return texture;
+        } catch (Throwable ignored) {
+            return null;
         } finally {
             MemoryUtil.memFree((java.nio.Buffer) pixels);
         }

@@ -26,7 +26,7 @@ public abstract class AbstractBlockAbstractBlockStateMixin {
 
     @Inject(method = "getRenderType", at = @At("HEAD"), cancellable = true)
     private void onGetRenderTypeHead(CallbackInfoReturnable<BlockRenderType> callback) {
-        if (!EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockRenderTypeEvent.class)
+        if (!EchoClient.eventsDisabled && !EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockRenderTypeEvent.class)
                 && new BlockRenderTypeEvent(getBlock()).post()) {
             callback.setReturnValue(BlockRenderType.INVISIBLE);
         }
@@ -34,21 +34,21 @@ public abstract class AbstractBlockAbstractBlockStateMixin {
 
     @Inject(method = "getRenderingSeed", at = @At("HEAD"))
     private void onGetRenderingSeedHead(BlockPos position, CallbackInfoReturnable<Long> callback) {
-        if (EventBus.hasSubscribers(BlockRenderSeedEvent.class)) {
+        if (!EchoClient.eventsDisabled && EventBus.hasSubscribers(BlockRenderSeedEvent.class)) {
             new BlockRenderSeedEvent(asBlockState(), position).post();
         }
     }
 
     @Inject(method = {"getCullingFace", "getCullingShape"}, at = @At("HEAD"), cancellable = true)
     private void onGetCullingFaceHead(CallbackInfoReturnable<VoxelShape> callback) {
-        if (!EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockCullingEvent.class) && new BlockCullingEvent().post()) {
+        if (!EchoClient.eventsDisabled && !EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockCullingEvent.class) && new BlockCullingEvent().post()) {
             callback.setReturnValue(VoxelShapes.empty());
         }
     }
 
     @Inject(method = "hasEmissiveLighting", at = @At("HEAD"), cancellable = true)
     private void onHasEmissiveLightingHead(CallbackInfoReturnable<Boolean> callback) {
-        if (!EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockLightingEvent.class)) {
+        if (!EchoClient.eventsDisabled && !EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockLightingEvent.class)) {
             BlockLightingEvent event = new BlockLightingEvent();
             event.post();
             if (event.fullBrightness) {
@@ -59,7 +59,7 @@ public abstract class AbstractBlockAbstractBlockStateMixin {
 
     @Inject(method = "getAmbientOcclusionLightLevel", at = @At("HEAD"), cancellable = true)
     private void onGetAmbientOcclusionLightLevelHead(CallbackInfoReturnable<Float> callback) {
-        if (!EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockLightingEvent.class)) {
+        if (!EchoClient.eventsDisabled && !EchoClient.externalRendererActive && EventBus.hasSubscribers(BlockLightingEvent.class)) {
             BlockLightingEvent event = new BlockLightingEvent();
             event.post();
             if (event.fullBrightness) {

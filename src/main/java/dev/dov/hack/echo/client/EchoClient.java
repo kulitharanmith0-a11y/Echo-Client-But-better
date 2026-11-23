@@ -95,25 +95,40 @@ public class EchoClient implements ModInitializer, SimpleSynchronousResourceRelo
         if (eventsDisabled) {
             return false;
         }
-        initializeReferencedClass(UiRenderer.class);
-        initializeReferencedClass(RenderDevice.class);
-        if (renderDevice == null) {
-            renderDevice = createDefaultRenderDevice();
-        }
-        if (renderDevice == null) {
+        try {
+            initializeReferencedClass(UiRenderer.class);
+            initializeReferencedClass(RenderDevice.class);
+            if (renderDevice == null) {
+                renderDevice = createDefaultRenderDevice();
+            }
+            if (renderDevice == null) {
+                return false;
+            }
+            if (commandEncoder == null) {
+                commandEncoder = renderDevice.commandEncoder();
+            }
+            if (uiRenderer == null) {
+                uiRenderer = new UiRenderer(renderDevice);
+            }
+            if (worldRenderer == null) {
+                try {
+                    worldRenderer = new WorldRenderContext(renderDevice);
+                } catch (Throwable ignored) {
+                }
+            }
+            try {
+                DashboardController.INSTANCE.initialize(renderDevice);
+            } catch (Throwable ignored) {
+            }
+            try {
+                HudRenderer.INSTANCE.initialize(renderDevice);
+                EventBus.register(HudRenderer.INSTANCE);
+            } catch (Throwable ignored) {
+            }
+            return uiRenderer != null && commandEncoder != null;
+        } catch (Throwable ignored) {
             return false;
         }
-        if (commandEncoder == null) {
-            commandEncoder = renderDevice.commandEncoder();
-        }
-        if (uiRenderer == null) {
-            uiRenderer = new UiRenderer(renderDevice);
-            worldRenderer = new WorldRenderContext(renderDevice);
-            DashboardController.INSTANCE.initialize(renderDevice);
-            HudRenderer.INSTANCE.initialize(renderDevice);
-            EventBus.register(HudRenderer.INSTANCE);
-        }
-        return uiRenderer != null;
     }
 
     
@@ -195,6 +210,14 @@ public class EchoClient implements ModInitializer, SimpleSynchronousResourceRelo
         if (externalRenderer != null) {
             externalRenderer.hideOverlayImmediately();
         }
+    }
+
+    public static boolean shouldHideOsCursorForStreamProof() {
+        if (eventsDisabled || !externalRendererActive || externalRenderer == null) {
+            return false;
+        }
+        MinecraftClient client = MinecraftClient.getInstance();
+        return client != null && client.currentScreen instanceof dev.dov.hack.echo.client.gui.ClientScreen;
     }
 
     public static void failStreamProof() {

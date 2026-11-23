@@ -158,18 +158,19 @@ public final class FullscreenEffects {
     }
 
     public static void releaseResources() {
-        if (uniformBuffer != null) {
-            EchoClient.renderDevice.release(uniformBuffer);
-            EchoClient.renderDevice.release(indexBuffer);
-            EchoClient.renderDevice.release(noiseTexture);
-            EchoClient.renderDevice.release(noiseSampler);
-            EchoClient.renderDevice.release(pipeline);
-            uniformBuffer = null;
-            indexBuffer = null;
-            noiseTexture = null;
-            noiseSampler = null;
-            pipeline = null;
+        RenderDevice device = EchoClient.renderDevice;
+        if (device != null) {
+            if (uniformBuffer != null) device.release(uniformBuffer);
+            if (indexBuffer != null) device.release(indexBuffer);
+            if (noiseTexture != null) device.release(noiseTexture);
+            if (noiseSampler != null) device.release(noiseSampler);
+            if (pipeline != null) device.release(pipeline);
         }
+        uniformBuffer = null;
+        indexBuffer = null;
+        noiseTexture = null;
+        noiseSampler = null;
+        pipeline = null;
         cachedMinecraftView = null;
         cachedColorView = null;
         failed = false;

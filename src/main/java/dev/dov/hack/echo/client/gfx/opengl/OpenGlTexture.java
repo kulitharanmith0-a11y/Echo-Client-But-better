@@ -14,6 +14,7 @@ public class OpenGlTexture extends Texture {
     public final boolean imported;
     public final boolean immutableStorage;
     public final int target;
+    private boolean destroyed;
 
     public OpenGlTexture(int width, int height, int depth, TextureFormat format, int usage, int mipCount) {
         super(width, height, depth, format, usage, mipCount);
@@ -64,9 +65,17 @@ public class OpenGlTexture extends Texture {
 
     @Override
     public void destroy() {
-        for (TextureView view : views) {
-            if (view instanceof OpenGlTextureView glView) glView.destroy();
+        if (destroyed) {
+            return;
         }
-        GL30C.glDeleteTextures(textureId);
+        destroyed = true;
+        if (views != null) {
+            for (TextureView view : views) {
+                if (view instanceof OpenGlTextureView glView) glView.destroy();
+            }
+        }
+        if (!imported && textureId != 0) {
+            GL30C.glDeleteTextures(textureId);
+        }
     }
 }

@@ -43,6 +43,7 @@ public final class SystemAnchorController implements MinecraftAccess {
     private static final int HURT_TIME_THRESHOLD = 0;
     private static final long AIRPLACE_DAMAGE_TIMEOUT_MS = 500L;
     private static final long ANCHOR_DOUBLE_PLACE_GUARD_MS = 350L;
+    private static final int DETONATION_SPAM_GUARD_TICKS = 5;
     private static final double SAFETY_RADIUS = 6.0;
     private static final double SAFETY_RADIUS_SQ = SAFETY_RADIUS * SAFETY_RADIUS;
     private static final double SAFE_ANCHOR_KEEP_DIST_SQ = 6.5 * 6.5;
@@ -86,6 +87,8 @@ public final class SystemAnchorController implements MinecraftAccess {
     private int lastAnchorPlaceTick = -1;
     private boolean restoreUseKey;
     private BlockPos lastExplodedPos;
+    private int recentDetonationTick = -100;
+    private int selectedAutomationSlot = -1;
     private boolean interacting;
 
     public SystemAnchorController(Predicate<Object> visibleWhen) {
@@ -171,6 +174,8 @@ public final class SystemAnchorController implements MinecraftAccess {
         lastAnchorPlaceTick = -1;
         restoreUseKey = false;
         lastExplodedPos = null;
+        recentDetonationTick = -100;
+        selectedAutomationSlot = -1;
         interacting = false;
     }
 
@@ -189,21 +194,28 @@ public final class SystemAnchorController implements MinecraftAccess {
         if (safetyAnchor != null && !hasUnchargedSafetyAnchor()) {
             resetSafety();
         }
-        // Prevent vanilla right-click hold from placing extra glowstone (2nd, 3rd, 4th...)
-        // during Safe Anchor or immediately after charging an anchor on the same hold.
-        if (event.getStack().isOf(Items.GLOWSTONE) && !PlacementWorldQueries.isBlock(pos, Blocks.RESPAWN_ANCHOR)
-                && (hasUnchargedSafetyAnchor() || glowstoneLockDuringHold)) {
+        // Classic Safe Anchor: cancel any non-anchor vanilla use while our uncharged safety anchor is active
+        if (hasUnchargedSafetyAnchor() && !PlacementWorldQueries.isBlock(pos, Blocks.RESPAWN_ANCHOR)) {
             event.cancel();
             return;
         }
-        // Prevent placing a second anchor on the same tick, while holding RMB after a placement,
-        // or stacking onto an uncharged anchor while sneaking.
+        // Prevent vanilla right-click hold from placing extra glowstone after charging or placing safety block
+        if (event.getStack().isOf(Items.GLOWSTONE) && !PlacementWorldQueries.isBlock(pos, Blocks.RESPAWN_ANCHOR)
+                && (glowstoneLockDuringHold || isHoldingSelectedGlowstone())) {
+            event.cancel();
+            return;
+        }
+        // Prevent placing a stray second anchor on the same tick, during the same RMB hold,
+        // right after an anchor detonation while spamming, or onto an uncharged anchor while sneaking.
         if (event.getStack().isOf(Items.RESPAWN_ANCHOR)) {
+            boolean recentDetonation = recentDetonationTick >= 0
+                    && CLIENT.player.age - recentDetonationTick <= DETONATION_SPAM_GUARD_TICKS;
             boolean recentPlacement = lastAnchorPlaceTick == CLIENT.player.age
                     || (anchorPlacedDuringHold
-                    && ((lastPlacedAnchorPos != null && PlacementWorldQueries.isBlock(lastPlacedAnchorPos, Blocks.RESPAWN_ANCHOR))
+                    && (recentDetonation
+                    || (lastPlacedAnchorPos != null && PlacementWorldQueries.isBlock(lastPlacedAnchorPos, Blocks.RESPAWN_ANCHOR))
                     || System.currentTimeMillis() - lastAnchorPlaceMs < ANCHOR_DOUBLE_PLACE_GUARD_MS));
-            if (recentPlacement || PlacementWorldQueries.isUnchargedRespawnAnchor(pos)) {
+            if (recentPlacement || recentDetonation || PlacementWorldQueries.isUnchargedRespawnAnchor(pos)) {
                 event.cancel();
                 return;
             }
@@ -220,10 +232,6 @@ public final class SystemAnchorController implements MinecraftAccess {
                 sampledSafetyDelayTicks = -1;
                 return;
             }
-        }
-        if (hasUnchargedSafetyAnchor() && !safetyBlockPlaced && !PlacementWorldQueries.isBlock(pos, Blocks.RESPAWN_ANCHOR)) {
-            event.cancel();
-            return;
         }
         if (PlacementWorldQueries.isChargedRespawnAnchor(pos)) {
             ownedAnchors.remove(pos);
@@ -279,8 +287,8 @@ public final class SystemAnchorController implements MinecraftAccess {
         if (!isUseKeyHeld()) {
             anchorPlacedDuringHold = false;
             glowstoneLockDuringHold = false;
-            safetyTicks = 0;
-            sampledSafetyDelayTicks = -1;
+            selectedAutomationSlot = -1;
+            resetSafety();
             return;
         }
         if (CLIENT.player.isUsingItem()) {
@@ -296,9 +304,8 @@ public final class SystemAnchorController implements MinecraftAccess {
             return;
         }
 
-        // Classic Safe Anchor: after placing an uncharged anchor, looking at a non-anchor block
-        // while holding right click switches to glowstone and places strictly ONE safety block.
-        // Keep suppressing vanilla use afterward so holding RMB never places 2, 3, or 4 glowstone.
+        // Classic Safe Anchor (ported directly from AnchorController): after placing an uncharged anchor,
+        // looking at any non-anchor block while holding RMB immediately switches to glowstone and places 1 safety block.
         if (hasUnchargedSafetyAnchor()
                 && CLIENT.crosshairTarget instanceof BlockHitResult safetyHit
                 && safetyHit.getType() == HitResult.Type.BLOCK
@@ -308,10 +315,8 @@ public final class SystemAnchorController implements MinecraftAccess {
                 if (sampledSafetyDelayTicks < 0) {
                     sampledSafetyDelayTicks = sampleDelayTicks(safeBlockDelay);
                 }
-                if (safetyTicks >= sampledSafetyDelayTicks) {
+                if (safetyTicks++ >= sampledSafetyDelayTicks) {
                     placeSafetyBlock(owner, safetyHit);
-                } else {
-                    safetyTicks++;
                 }
             }
             return;
@@ -328,11 +333,14 @@ public final class SystemAnchorController implements MinecraftAccess {
         }
 
         BlockPos targetPos = hit.getBlockPos().toImmutable();
+        boolean insideDetonationGuard = recentDetonationTick >= 0
+                && CLIENT.player.age - recentDetonationTick <= DETONATION_SPAM_GUARD_TICKS;
         if (lastExplodedPos != null) {
             boolean pointingAtExplodedBase = (targetPos.equals(lastExplodedPos.down()) && hit.getSide() == Direction.UP)
                     || targetPos.equals(lastExplodedPos);
             if (pointingAtExplodedBase
-                    && (PlacementWorldQueries.isBlock(lastExplodedPos, Blocks.RESPAWN_ANCHOR)
+                    && (insideDetonationGuard
+                    || PlacementWorldQueries.isBlock(lastExplodedPos, Blocks.RESPAWN_ANCHOR)
                     || airplacedAnchors.contains(lastExplodedPos))) {
                 suppressUseKey();
                 if (!PlacementWorldQueries.isBlock(targetPos, Blocks.RESPAWN_ANCHOR)) {
@@ -342,7 +350,11 @@ public final class SystemAnchorController implements MinecraftAccess {
         }
 
         if (!PlacementWorldQueries.isBlock(targetPos, Blocks.RESPAWN_ANCHOR)) {
-            if (glowstoneLockDuringHold && CLIENT.player.getMainHandStack().isOf(Items.GLOWSTONE)) {
+            if ((glowstoneLockDuringHold || isHoldingSelectedGlowstone())
+                    && CLIENT.player.getMainHandStack().isOf(Items.GLOWSTONE)) {
+                suppressUseKey();
+            } else if ((anchorPlacedDuringHold || insideDetonationGuard)
+                    && CLIENT.player.getMainHandStack().isOf(Items.RESPAWN_ANCHOR)) {
                 suppressUseKey();
             }
             return;
@@ -376,28 +388,18 @@ public final class SystemAnchorController implements MinecraftAccess {
         if (safetyBlockPlaced) {
             return;
         }
-        ActionCoordinator coordinator = ActionCoordinator.get();
-        if (coordinator != null && (coordinator.isActionSent() || coordinator.isSlotPending())) {
-            return;
-        }
-        if (!BlockPlacement.canPlaceStack(new ItemStack(Items.GLOWSTONE), hit)) {
-            return;
-        }
         int slot = InventoryItems.findStackInHotbar(stack -> stack.isOf(Items.GLOWSTONE));
         if (slot == -1) {
             return;
         }
         if (CLIENT.player.getInventory().getSelectedSlot() != slot) {
-            if (!selectSlot(owner, slot)) {
-                return;
-            }
+            InventoryItems.selectHotbarSlot(slot);
         }
+        selectedAutomationSlot = slot;
         if (!CLIENT.player.getMainHandStack().isOf(Items.GLOWSTONE)) {
             return;
         }
-        if (coordinator != null && coordinator.isSlotPending()) {
-            return;
-        }
+        suppressUseKey();
         if (interactBlock(owner, hit, true)) {
             safetyBlockPlaced = true;
             glowstoneLockDuringHold = true;
@@ -406,6 +408,13 @@ public final class SystemAnchorController implements MinecraftAccess {
             switchTimer.reset();
             glowstoneTimer.reset();
         }
+    }
+
+    private boolean isHoldingSelectedGlowstone() {
+        return selectedAutomationSlot != -1
+                && CLIENT.player != null
+                && CLIENT.player.getInventory().getSelectedSlot() == selectedAutomationSlot
+                && CLIENT.player.getMainHandStack().isOf(Items.GLOWSTONE);
     }
 
     private void handleUnchargedAnchor(Module owner, BlockHitResult hit) {
@@ -422,6 +431,7 @@ public final class SystemAnchorController implements MinecraftAccess {
                     return;
                 }
                 if (selectSlot(owner, glowstoneSlot)) {
+                    selectedAutomationSlot = glowstoneSlot;
                     switchTimer.reset();
                 }
             }
@@ -500,12 +510,12 @@ public final class SystemAnchorController implements MinecraftAccess {
 
         if (interactBlock(owner, hit, true)) {
             lastExplodedPos = targetPos;
+            recentDetonationTick = CLIENT.player.age;
             ownedAnchors.remove(targetPos);
             airplacedAnchors.remove(targetPos);
             airplacedTimestamps.remove(targetPos);
             airplaceDamageWindowCleared.remove(targetPos);
             if (targetPos.equals(lastPlacedAnchorPos)) {
-                anchorPlacedDuringHold = false;
                 lastPlacedAnchorPos = null;
             }
         }

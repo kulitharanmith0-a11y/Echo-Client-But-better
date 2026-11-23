@@ -93,12 +93,25 @@ public class UiRenderer {
         this.device = device;
         cameraBuffer = device.createBuffer(BufferInfo.builder().usage(2).size(CAMERA_BUFFER_BYTES)
                 .dynamic(true).mapped(true).build());
+        BackdropPass createdBackdrop = null;
         if (NativeCapabilities.computeShaders() && NativeCapabilities.storageImages()) {
-            backdrop = new ComputeBackdropEffect(device, 4);
-        } else {
-            Framebuffer framebuffer = MinecraftClient.getInstance().getFramebuffer();
-            backdrop = new RenderPassBackdropEffect(device, 4, framebuffer.textureWidth, framebuffer.textureHeight);
+            try {
+                createdBackdrop = new ComputeBackdropEffect(device, 4);
+            } catch (Throwable ignored) {
+                createdBackdrop = null;
+            }
         }
+        if (createdBackdrop == null) {
+            try {
+                Framebuffer framebuffer = MinecraftClient.getInstance().getFramebuffer();
+                int width = framebuffer != null ? Math.max(1, framebuffer.textureWidth) : 1;
+                int height = framebuffer != null ? Math.max(1, framebuffer.textureHeight) : 1;
+                createdBackdrop = new RenderPassBackdropEffect(device, 4, width, height);
+            } catch (Throwable ignored) {
+                createdBackdrop = null;
+            }
+        }
+        backdrop = createdBackdrop;
         images = NativeCapabilities.sampledImageArrays()
                 ? new MultiTextureEffectBatch(device, cameraBuffer, false, true, false)
                 : new IndexedTextureEffectBatch(device, cameraBuffer, false, true, false);
@@ -158,6 +171,9 @@ public class UiRenderer {
     }
 
     public void drawImage(TextureView image, float x, float y, float width, float height, float radius, float opacity) {
+        if (image == null) {
+            return;
+        }
         enqueueBatch(IMAGE_BATCH, () -> {
             reserveImage(images);
             images.draw(image, x, y, width, height, radius, opacity, -1, false, 0.0F, 0.0F, 1.0F, 1.0F, nextDepth());
@@ -165,6 +181,9 @@ public class UiRenderer {
     }
 
     public void drawImage(TextureView image, float x, float y, float width, float height, float radius, float opacity, float u0, float v0, float u1, float v1) {
+        if (image == null) {
+            return;
+        }
         enqueueBatch(IMAGE_BATCH, () -> {
             reserveImage(images);
             images.draw(image, x, y, width, height, radius, opacity, -1, false, u0, v0, u1, v1, nextDepth());
@@ -172,6 +191,9 @@ public class UiRenderer {
     }
 
     public void drawMaskedImage(TextureView image, float x, float y, float width, float height, float radius, float opacity, int color) {
+        if (image == null) {
+            return;
+        }
         enqueueBatch(IMAGE_BATCH, () -> {
             reserveImage(images);
             images.draw(image, x, y, width, height, radius, opacity, color, true, 0.0F, 0.0F, 1.0F, 1.0F, nextDepth());
@@ -187,6 +209,9 @@ public class UiRenderer {
     }
 
     public void drawBackdrop(TextureView image, float x, float y, float width, float height, float radius, float opacity, boolean mask, int color) {
+        if (image == null) {
+            return;
+        }
         enqueueBatch(SCREEN_IMAGE_BATCH, () -> {
             reserveImage(screenImages);
             screenImages.draw(image, x, y, width, height, radius, opacity, color, mask, 0.0F, 0.0F, 1.0F, 1.0F, nextDepth());
@@ -270,6 +295,47 @@ public class UiRenderer {
 
     public void drawQuadraticStroke(float startX, float startY, float controlX, float controlY, float endX, float endY, float width, int argb) {
         enqueueBatch(IMMEDIATE_BATCH, () -> immediate.quadraticStroke(startX, startY, controlX, controlY, endX, endY, width, 0.45F, 0.125F, argb, nextDepth()));
+    }
+
+    public void drawPointerCursor(float x, float y) {
+        retainedCalls.add(() -> {
+            flushBatches(commands, pass);
+            selectBatch(IMMEDIATE_BATCH);
+            float shadowDepth = nextDepth();
+            drawCursorPolygon(x + 0.85F, y + 1.05F, 0x55000000, true, shadowDepth);
+            float outlineDepth = nextDepth();
+            drawCursorPolygon(x, y, 0xFF0A0C12, true, outlineDepth);
+            float fillDepth = nextDepth();
+            drawCursorPolygon(x, y, 0xFFFFFFFF, false, fillDepth);
+        });
+    }
+
+    private void drawCursorPolygon(float x, float y, int color, boolean expanded, float depth) {
+        if (expanded) {
+            float tipX = x - 0.65F, tipY = y - 1.15F;
+            float leftX = x - 0.65F, leftY = y + 12.1F;
+            float notchLeftX = x + 2.55F, notchLeftY = y + 9.25F;
+            float tailLeftX = x + 4.35F, tailLeftY = y + 13.0F;
+            float tailRightX = x + 7.1F, tailRightY = y + 11.7F;
+            float notchRightX = x + 5.25F, notchRightY = y + 8.15F;
+            float rightX = x + 9.15F, rightY = y + 8.15F;
+            immediate.fillTriangle(tipX, tipY, leftX, leftY, notchLeftX, notchLeftY, color, depth);
+            immediate.fillTriangle(tipX, tipY, notchLeftX, notchLeftY, rightX, rightY, color, depth);
+            immediate.fillTriangle(notchLeftX, notchLeftY, tailLeftX, tailLeftY, tailRightX, tailRightY, color, depth);
+            immediate.fillTriangle(notchLeftX, notchLeftY, tailRightX, tailRightY, notchRightX, notchRightY, color, depth);
+        } else {
+            float tipX = x, tipY = y;
+            float leftX = x, leftY = y + 10.5F;
+            float notchLeftX = x + 2.8F, notchLeftY = y + 8.0F;
+            float tailLeftX = x + 4.7F, tailLeftY = y + 12.0F;
+            float tailRightX = x + 6.1F, tailRightY = y + 11.3F;
+            float notchRightX = x + 4.2F, notchRightY = y + 7.3F;
+            float rightX = x + 7.6F, rightY = y + 7.3F;
+            immediate.fillTriangle(tipX, tipY, leftX, leftY, notchLeftX, notchLeftY, color, depth);
+            immediate.fillTriangle(tipX, tipY, notchLeftX, notchLeftY, rightX, rightY, color, depth);
+            immediate.fillTriangle(notchLeftX, notchLeftY, tailLeftX, tailLeftY, tailRightX, tailRightY, color, depth);
+            immediate.fillTriangle(notchLeftX, notchLeftY, tailRightX, tailRightY, notchRightX, notchRightY, color, depth);
+        }
     }
 
     public void drawShadow(float x, float y, float width, float height, float radius, float sigma, int argb) {
@@ -374,18 +440,37 @@ public class UiRenderer {
     }
 
     public void updateBackdrop(CommandEncoder commands, BackdropMode mode) {
-        Framebuffer framebuffer = MinecraftClient.getInstance().getFramebuffer();
-        float scale = Math.min(framebuffer.textureWidth / 1920.0F, framebuffer.textureHeight / 1080.0F);
-        TextureView source = GlTextureBridge.importColor(device, framebuffer.getColorAttachmentView());
-        BackdropTextures result = backdrop.render(commands, source, source.yFlipped, scale, mode);
-        if (dumpFrames > 0 && --dumpFrames == 0) {
-            DebugTextureDump.dump(source, "source");
-            DebugTextureDump.dump(result.halfResolution(), "half");
-            DebugTextureDump.dump(result.fullResolution(), "full");
+        if (backdrop == null || commands == null) {
+            halfResolutionBackdrop = null;
+            fullResolutionBackdrop = null;
+            backdropTexture = null;
+            return;
         }
-        halfResolutionBackdrop = result.halfResolution();
-        fullResolutionBackdrop = result.fullResolution();
-        backdropTexture = result.fullResolution();
+        try {
+            Framebuffer framebuffer = MinecraftClient.getInstance().getFramebuffer();
+            if (framebuffer == null || framebuffer.textureWidth <= 0 || framebuffer.textureHeight <= 0
+                    || framebuffer.getColorAttachmentView() == null) {
+                return;
+            }
+            float scale = Math.min(framebuffer.textureWidth / 1920.0F, framebuffer.textureHeight / 1080.0F);
+            TextureView source = GlTextureBridge.importColor(device, framebuffer.getColorAttachmentView());
+            if (source == null) {
+                return;
+            }
+            BackdropTextures result = backdrop.render(commands, source, source.yFlipped, scale, mode);
+            if (dumpFrames > 0 && --dumpFrames == 0) {
+                DebugTextureDump.dump(source, "source");
+                DebugTextureDump.dump(result.halfResolution(), "half");
+                DebugTextureDump.dump(result.fullResolution(), "full");
+            }
+            halfResolutionBackdrop = result.halfResolution();
+            fullResolutionBackdrop = result.fullResolution();
+            backdropTexture = result.fullResolution();
+        } catch (Throwable ignored) {
+            halfResolutionBackdrop = null;
+            fullResolutionBackdrop = null;
+            backdropTexture = null;
+        }
     }
 
     private void resetFrame(CommandEncoder commands) {
@@ -444,7 +529,9 @@ public class UiRenderer {
         for (RenderBatch batch : batches) {
             batch.destroy();
         }
-        backdrop.close();
+        if (backdrop != null) {
+            backdrop.close();
+        }
         device.release(cameraBuffer);
     }
 }

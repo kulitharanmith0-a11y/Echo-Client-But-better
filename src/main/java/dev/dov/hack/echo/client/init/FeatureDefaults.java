@@ -271,15 +271,15 @@ public final class FeatureDefaults {
         dev.dov.hack.echo.client.settings.ItemListSetting preparedReturnItems = new dev.dov.hack.echo.client.settings.ItemListSetting(CatalogText.literal("Return Items"));
         dev.dov.hack.echo.client.settings.BooleanSetting preparedAutoAim = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Auto Aim"), false);
         dev.dov.hack.echo.client.settings.ChoiceSetting preparedAimMath = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Aim Math"), CatalogText.literal("Smooth"), new java.lang.CharSequence[] {CatalogText.literal("Smooth"), CatalogText.literal("Natural"), CatalogText.literal("Blatant")});
-        dev.dov.hack.echo.client.settings.ChoiceSetting preparedAimVector = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Aim Vector"), CatalogText.literal("Straight"), new java.lang.CharSequence[] {CatalogText.literal("Straight"), CatalogText.literal("Closest")});
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedAimVector = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Aim Vector"), CatalogText.literal("Closest"), new java.lang.CharSequence[] {CatalogText.literal("Straight"), CatalogText.literal("Closest")});
         dev.dov.hack.echo.client.settings.ChoiceSetting preparedTargetPriority = new dev.dov.hack.echo.client.settings.ChoiceSetting(CatalogText.literal("Target Priority"), CatalogText.literal("Nearest"), new java.lang.CharSequence[] {CatalogText.literal("Nearest"), CatalogText.literal("FOV"), CatalogText.literal("HurtTick")});
         dev.dov.hack.echo.client.settings.BooleanSetting preparedRandom = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Random"), false);
         dev.dov.hack.echo.client.settings.BooleanSetting preparedSilentRotations = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Silent Rotations"), false);
         dev.dov.hack.echo.client.settings.BooleanSetting preparedThroughWalls = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), false);
-        dev.dov.hack.echo.client.settings.FloatSetting preparedHorizontalSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Horizontal Speed"), 5.0f, 0.0f, 10.0f, 0.1f);
-        dev.dov.hack.echo.client.settings.FloatSetting preparedVerticalSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Vertical Speed"), 4.0f, 0.0f, 10.0f, 0.1f);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedHorizontalSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Horizontal Speed"), 6.5f, 0.0f, 10.0f, 0.1f);
+        dev.dov.hack.echo.client.settings.FloatSetting preparedVerticalSpeed = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Vertical Speed"), 6.5f, 0.0f, 10.0f, 0.1f);
         dev.dov.hack.echo.client.settings.FloatSetting preparedRange = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Range"), 6.0f, 1.0f, 50.0f, 0.1f, CatalogText.literal(" blocks"));
-        dev.dov.hack.echo.client.settings.FloatSetting preparedYawFOV = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Yaw FOV"), 90.0f, 0.0f, 360.0f, 1.0f, CatalogText.literal(" deg"));
+        dev.dov.hack.echo.client.settings.FloatSetting preparedYawFOV = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Yaw FOV"), 120.0f, 0.0f, 360.0f, 1.0f, CatalogText.literal(" deg"));
         dev.dov.hack.echo.client.settings.FloatSetting preparedPitchFOV = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Pitch FOV"), 180.0f, 0.0f, 180.0f, 1.0f, CatalogText.literal(" deg"));
         dev.dov.hack.echo.client.settings.FloatSetting preparedMultipoint = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Multipoint"), 50.0f, 0.0f, 100.0f, 1.0f, CatalogText.literal("%"));
         dev.dov.hack.echo.client.settings.BooleanSetting preparedAutomaticallyUnequipElytra = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Automatically Unequip Elytra"), false);
@@ -1059,10 +1059,11 @@ public final class FeatureDefaults {
         dev.dov.hack.echo.client.settings.FloatRangeSetting preparedReactionDelay = new dev.dov.hack.echo.client.settings.FloatRangeSetting(CatalogText.literal("Reaction Delay"), 0.0f, 0.0f, 0.0f, 500.0f, 1.0f, CatalogText.literal("ms"));
         dev.dov.hack.echo.client.settings.ItemListSetting preparedReturnItems = new dev.dov.hack.echo.client.settings.ItemListSetting(CatalogText.literal("Return Items"));
         dev.dov.hack.echo.client.settings.BooleanSetting preparedStun = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Stun"), false);
+        dev.dov.hack.echo.client.settings.IntSetting preparedStunChance = new dev.dov.hack.echo.client.settings.IntSetting(CatalogText.literal("Stun Chance"), 100, 0, 100, CatalogText.literal("%"));
         dev.dov.hack.echo.client.settings.FloatRangeSetting preparedSwapBackDelay = new dev.dov.hack.echo.client.settings.FloatRangeSetting(CatalogText.literal("Swap Back Delay"), 1.0f, 1.0f, 0.0f, 20.0f, 1.0f, CatalogText.literal(" ticks"));
         dev.dov.hack.echo.client.settings.ItemListSetting preparedItemWhitelist = new dev.dov.hack.echo.client.settings.ItemListSetting(CatalogText.literal("Item Whitelist"));
 
-        dev.dov.hack.echo.client.modules.impl.combat.ShieldBreaker.assignBootstrapSettings(Module, preparedUnblockOwnShield, preparedHotbarWhitelist, preparedReturnSlots, preparedSwapBack, preparedReturnTo, preparedMode, preparedAttackDelay, preparedAutoSwap, preparedReactionDelay, preparedReturnItems, preparedStun, preparedSwapBackDelay, preparedItemWhitelist);
+        dev.dov.hack.echo.client.modules.impl.combat.ShieldBreaker.assignBootstrapSettings(Module, preparedUnblockOwnShield, preparedHotbarWhitelist, preparedReturnSlots, preparedSwapBack, preparedReturnTo, preparedMode, preparedAttackDelay, preparedAutoSwap, preparedReactionDelay, preparedReturnItems, preparedStun, preparedStunChance, preparedSwapBackDelay, preparedItemWhitelist);
 
         Module.settings.clear();
         dev.dov.hack.echo.client.modules.impl.combat.ShieldBreaker.appendBootstrapSettings(Module);
@@ -1723,9 +1724,14 @@ public final class FeatureDefaults {
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackSlash(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackBlockHit(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackExhibition(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackSigma(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackKatana(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackArc(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackThrust(),
-                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackFlick()
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackFlick(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackSpin(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapAttackBreeze()
                 });
         dev.dov.hack.echo.client.settings.ChoiceSetting preparedUseStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
                 CatalogText.literal("Use Style"),
@@ -1734,7 +1740,9 @@ public final class FeatureDefaults {
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseSip(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseLowGuard(),
-                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUsePulse()
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUsePulse(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseCleanTilt(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapUseFloating()
                 });
         dev.dov.hack.echo.client.settings.ChoiceSetting preparedPlaceStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
                 CatalogText.literal("Place Style"),
@@ -1743,15 +1751,101 @@ public final class FeatureDefaults {
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlacePop(),
                         dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceSlide(),
-                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceSnap()
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceSnap(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceFlip(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapPlaceBounce()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedIdleStyle = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Idle Style"),
+                dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapNone(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapIdleBreathe(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapIdleFloat(),
+                        dev.dov.hack.echo.client.modules.impl.render.Animations.bootstrapIdleSway()
                 });
         dev.dov.hack.echo.client.settings.BooleanSetting preparedSmoothEquip = new dev.dov.hack.echo.client.settings.BooleanSetting(CatalogText.literal("Smooth Equip"), true);
         dev.dov.hack.echo.client.settings.FloatSetting preparedIntensity = new dev.dov.hack.echo.client.settings.FloatSetting(CatalogText.literal("Intensity"), 1.0f, 0.2f, 2.0f, 0.05f);
 
         dev.dov.hack.echo.client.modules.impl.render.Animations.assignBootstrapSettings(
-                Module, preparedAttackStyle, preparedUseStyle, preparedPlaceStyle, preparedSmoothEquip, preparedIntensity);
+                Module, preparedAttackStyle, preparedUseStyle, preparedPlaceStyle, preparedIdleStyle, preparedSmoothEquip, preparedIntensity);
         Module.settings.clear();
         dev.dov.hack.echo.client.modules.impl.render.Animations.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.utility.CartRefill Module) {
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedMode = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Mode"),
+                dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapModeAutoOpen(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapModeAutoOpen(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapModeInInventory(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapModeSilent()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedCartType = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Cart Type"),
+                dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapCartTnt(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapCartTnt(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapCartAny()
+                });
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedTrigger = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Trigger"),
+                dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapTriggerNoCart(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapTriggerNoCart(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapTriggerFillSlots()
+                });
+        dev.dov.hack.echo.client.settings.HotbarSlotsSetting preparedHotbarSlots = new dev.dov.hack.echo.client.settings.HotbarSlotsSetting(
+                CatalogText.literal("Hotbar Slots"));
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedPickOrder = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Pick From Inv"),
+                dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapPickClosest(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapPickClosest(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapPickRandom(),
+                        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.bootstrapPickFirst()
+                });
+        dev.dov.hack.echo.client.settings.FloatRangeSetting preparedDelay = new dev.dov.hack.echo.client.settings.FloatRangeSetting(
+                CatalogText.literal("Delay"), 50.0f, 120.0f, 0.0f, 500.0f, 10.0f, CatalogText.literal(" ms"));
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedAutoClose = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Auto Close"), true);
+        dev.dov.hack.echo.client.settings.FloatRangeSetting preparedCloseDelay = new dev.dov.hack.echo.client.settings.FloatRangeSetting(
+                CatalogText.literal("Close Delay"), 40.0f, 100.0f, 0.0f, 400.0f, 10.0f, CatalogText.literal(" ms"));
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedOnlyEmptySlot = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Only Empty Slot"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedPauseOnUse = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Pause On Use"), true);
+
+        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.assignBootstrapSettings(
+                Module, preparedMode, preparedCartType, preparedTrigger, preparedHotbarSlots,
+                preparedPickOrder, preparedDelay, preparedAutoClose, preparedCloseDelay,
+                preparedOnlyEmptySlot, preparedPauseOnUse);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.utility.CartRefill.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(dev.dov.hack.echo.client.modules.impl.movement.Snaptap Module) {
+        dev.dov.hack.echo.client.settings.ChoiceSetting preparedMode = new dev.dov.hack.echo.client.settings.ChoiceSetting(
+                CatalogText.literal("Priority"),
+                dev.dov.hack.echo.client.modules.impl.movement.Snaptap.bootstrapModeLastInput(),
+                new java.lang.CharSequence[] {
+                        dev.dov.hack.echo.client.modules.impl.movement.Snaptap.bootstrapModeLastInput(),
+                        dev.dov.hack.echo.client.modules.impl.movement.Snaptap.bootstrapModeFirstInput()
+                });
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedHorizontal = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Strafe (A/D)"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedVertical = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Forward/Back (W/S)"), true);
+        dev.dov.hack.echo.client.settings.BooleanSetting preparedPauseWhileSneaking = new dev.dov.hack.echo.client.settings.BooleanSetting(
+                CatalogText.literal("Pause While Sneaking"), false);
+
+        dev.dov.hack.echo.client.modules.impl.movement.Snaptap.assignBootstrapSettings(
+                Module, preparedMode, preparedHorizontal, preparedVertical, preparedPauseWhileSneaking);
+        Module.settings.clear();
+        dev.dov.hack.echo.client.modules.impl.movement.Snaptap.appendBootstrapSettings(Module);
         Module.postInitialize();
     }
 

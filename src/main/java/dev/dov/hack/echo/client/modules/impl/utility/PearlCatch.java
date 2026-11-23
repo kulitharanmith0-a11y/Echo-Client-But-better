@@ -50,17 +50,19 @@ import net.minecraft.util.math.Vec3d;
 
 public class PearlCatch extends Module {
     private static final double LAUNCH_HEIGHT_OFFSET = 0.1;
-    private static final double SPAWN_MATCH_DISTANCE = 0.05;
-    private static final double REQUIRED_HIT_FRACTION = 0.5;
-    private static final double LAST_CHANCE_HIT_FRACTION = 0.2;
+    private static final double SPAWN_MATCH_DISTANCE = 1.5;
+    private static final double REQUIRED_HIT_FRACTION = 0.72;
+    private static final double RELAXED_HIT_FRACTION = 0.50;
+    private static final double LAST_CHANCE_HIT_FRACTION = 0.25;
+    private static final int SPAWN_RECONCILE_WAIT_TICKS = 2;
     private static final int AIM_WAIT_TICKS = 8;
     private static final int RETRY_DELAY_TICKS = 10;
     private static final int MAX_RETRIES = 2;
     private static final int CONFIRM_GRACE_TICKS = 3;
-    private static final float MIN_AIM_SPEED = 40.0F;
-    private static final float MAX_AIM_SPEED = 300.0F;
+    private static final float MIN_AIM_SPEED = 50.0F;
+    private static final float MAX_AIM_SPEED = 420.0F;
     private static final float IMMEDIATE_AIM_SPEED = 1000.0F;
-    private static final double VISIBLE_AIM_TOLERANCE = 0.1;
+    private static final double VISIBLE_AIM_TOLERANCE = 0.06;
     private static final double AIM_DISTANCE = 100.0;
     private static final String HIGH_DELAY_TOOLTIP = "Timing";
 
@@ -324,8 +326,8 @@ public class PearlCatch extends Module {
             resetNormalSequence(true);
             return;
         }
-        Vec3d launchPosition = new Vec3d(origin.x, origin.y + client.player.getStandingEyeHeight()
-                - LAUNCH_HEIGHT_OFFSET, origin.z);
+        float eyeHeight = currentEyeHeight();
+        Vec3d launchPosition = new Vec3d(origin.x, origin.y + eyeHeight - LAUNCH_HEIGHT_OFFSET, origin.z);
         trajectory = new ProjectileState(launchPosition, LaunchTrajectoryMath.direction(rotation.yaw(), rotation.pitch()).multiply(1.5).add(velocity), false);
         pearlFlightTicks = LaunchTrajectorySearch.flightTicks(trajectory);
         pearlThrowTick = client.player.age;
@@ -336,7 +338,7 @@ public class PearlCatch extends Module {
     private void prepareCatchPlan() {
         reconcilePearlSpawn();
         Vec3d origin = sequenceOrigin();
-        planningOrigin = new Vec3d(origin.x, origin.y + client.player.getStandingEyeHeight(), origin.z);
+        planningOrigin = new Vec3d(origin.x, origin.y + currentEyeHeight(), origin.z);
         planningVelocity = sequenceVelocity();
         planningElapsedTicks = client.player.age - pearlThrowTick;
         pendingPlan = autoAim.getValue() ? LaunchTrajectorySearch.findCatch(trajectory, planningOrigin, planningVelocity, planningElapsedTicks, pearlFlightTicks, lowTrajectory) : null;
@@ -347,24 +349,45 @@ public class PearlCatch extends Module {
     private LaunchCandidate planForTick(int tick) {
         reconcilePearlSpawn();
         Vec3d origin = sequenceOrigin();
-        Vec3d eye = new Vec3d(origin.x, origin.y + client.player.getStandingEyeHeight(), origin.z);
-        LaunchCandidate plan = LaunchTrajectorySearch.findCatch(trajectory, eye, sequenceVelocity(), tick - pearlThrowTick, pearlFlightTicks, lowTrajectory);
+        Vec3d velocity = sequenceVelocity();
+        int ticksAhead = Math.max(0, tick - client.player.age);
+        double px = origin.x;
+        double py = origin.y + currentEyeHeight();
+        double pz = origin.z;
+        double vx = velocity.x;
+        double vy = velocity.y;
+        double vz = velocity.z;
+        for (int i = 0; i < ticksAhead; i++) {
+            px += vx;
+            py += vy;
+            pz += vz;
+            if (!capturedOnGround) {
+                vy = (vy - 0.08) * 0.98;
+            }
+        }
+        Vec3d projectedEye = new Vec3d(px, py, pz);
+        Vec3d projectedVel = new Vec3d(vx, capturedOnGround ? 0.0 : vy, vz);
+        LaunchCandidate plan = LaunchTrajectorySearch.findCatch(trajectory, projectedEye, projectedVel, tick - pearlThrowTick, pearlFlightTicks, lowTrajectory);
         return plan != null ? plan : activePlan;
     }
 
-    private LaunchCandidate usablePlan(boolean lastChance) {
+    private LaunchCandidate usablePlan(int lateTicks, boolean lastChance) {
         LaunchCandidate plan = pendingPlan;
         if (plan == null) return null;
+        double required = lastChance
+                ? LAST_CHANCE_HIT_FRACTION
+                : (lateTicks >= 3 ? RELAXED_HIT_FRACTION : REQUIRED_HIT_FRACTION);
         if (!usesVisibleAim()) {
-            if (plan.hitFraction() < REQUIRED_HIT_FRACTION
-                    && (!lastChance || plan.hitFraction() < LAST_CHANCE_HIT_FRACTION)) return null;
+            if (plan.hitFraction() < required) return null;
             return plan;
         }
         float yaw = client.player.getYaw();
         float pitch = client.player.getPitch();
         double hitFraction = LaunchTrajectorySearch.hitFraction(trajectory, planningOrigin, planningVelocity, planningElapsedTicks, yaw, pitch, pearlFlightTicks - 1);
-        if (hitFraction < Math.max(REQUIRED_HIT_FRACTION, plan.hitFraction() - VISIBLE_AIM_TOLERANCE)
-                && (!lastChance || hitFraction < LAST_CHANCE_HIT_FRACTION)) return null;
+        double visibleRequired = lastChance
+                ? LAST_CHANCE_HIT_FRACTION
+                : Math.max(required, plan.hitFraction() - VISIBLE_AIM_TOLERANCE);
+        if (hitFraction < visibleRequired) return null;
         return new LaunchCandidate(yaw, pitch, hitFraction, hitFraction, plan.meanHitTick());
     }
 
@@ -390,7 +413,14 @@ public class PearlCatch extends Module {
             throwWindCharge(slot, null);
             return;
         }
-        LaunchCandidate plan = usablePlan(lateTicks >= AIM_WAIT_TICKS);
+        // On delayed/high catches, wait up to 2 ticks for exact server pearl velocity reconciliation
+        // so the solver uses the exact server spread instead of estimating.
+        if (!lowTrajectory && trajectory != null && !trajectory.exactVelocity()
+                && lateTicks < SPAWN_RECONCILE_WAIT_TICKS
+                && (client.player.age - pearlThrowTick) < Math.max(4, pearlFlightTicks - 4)) {
+            return;
+        }
+        LaunchCandidate plan = usablePlan(lateTicks, lateTicks >= AIM_WAIT_TICKS);
         if (plan != null) throwWindCharge(slot, plan);
         else if (lateTicks >= AIM_WAIT_TICKS || client.player.age - pearlThrowTick >= pearlFlightTicks)
             resetNormalSequence(true);
@@ -422,7 +452,7 @@ public class PearlCatch extends Module {
         if (plannedPlayerTick != tick) return;
         if (client.player.getItemCooldownManager().isCoolingDown(new ItemStack(Items.WIND_CHARGE))) return;
         int slot = InventoryItems.findStackInHotbar(stack -> stack.getItem() == Items.WIND_CHARGE);
-        LaunchCandidate plan = usablePlan(true);
+        LaunchCandidate plan = usablePlan(AIM_WAIT_TICKS, true);
         if (slot == -1 || plan == null) {
             if (tick - windChargeThrowTick > 18) resetNormalSequence(switchBack.getValue());
             return;
@@ -434,10 +464,14 @@ public class PearlCatch extends Module {
     private void reconcilePearlSpawn() {
         Vec3d position = pearlSpawnPosition;
         Vec3d velocity = pearlSpawnVelocity;
-        if (trajectory.exactVelocity() || position == null || velocity == null) return;
+        if (trajectory == null || trajectory.exactVelocity() || position == null || velocity == null) return;
         if (position.distanceTo(trajectory.position()) > SPAWN_MATCH_DISTANCE) return;
-        trajectory = new ProjectileState(trajectory.position(), velocity, true);
+        trajectory = new ProjectileState(position, velocity, true);
         pearlFlightTicks = LaunchTrajectorySearch.flightTicks(trajectory);
+    }
+
+    private float currentEyeHeight() {
+        return client.player == null ? 1.62F : client.player.getEyeHeight(client.player.getPose());
     }
 
     private void throwWindCharge(int slot, LaunchCandidate plan) {
@@ -576,10 +610,11 @@ public class PearlCatch extends Module {
         Vec3d origin = sequenceOrigin();
         Vec3d velocity = sequenceVelocity();
         Rotation rotation = rotations().effectiveRotation();
-        Vec3d launchPosition = new Vec3d(origin.x, origin.y + client.player.getStandingEyeHeight() - LAUNCH_HEIGHT_OFFSET, origin.z);
+        float eyeHeight = currentEyeHeight();
+        Vec3d launchPosition = new Vec3d(origin.x, origin.y + eyeHeight - LAUNCH_HEIGHT_OFFSET, origin.z);
         ProjectileState launched = new ProjectileState(launchPosition, LaunchTrajectoryMath.direction(rotation.yaw(), rotation.pitch()).multiply(1.5).add(velocity), false);
         int flightTicks = LaunchTrajectorySearch.flightTicks(launched);
-        Vec3d eye = new Vec3d(origin.x, origin.y + client.player.getStandingEyeHeight(), origin.z);
+        Vec3d eye = new Vec3d(origin.x, origin.y + eyeHeight, origin.z);
         double hitFraction = LaunchTrajectorySearch.hitFraction(launched, eye, velocity, 0, rotation.yaw(), rotation.pitch(), flightTicks - 1);
         if (!autoAim.getValue() || hitFraction >= REQUIRED_HIT_FRACTION) {
             actions().executeDoItemUse(this);
@@ -608,7 +643,8 @@ public class PearlCatch extends Module {
     private void throwInstantFollowUp() {
         int tick = client.player.age;
         if (plannedPlayerTick != tick) return;
-        LaunchCandidate plan = usablePlan(tick - scheduledCatchTick >= AIM_WAIT_TICKS);
+        int lateTicks = tick - scheduledCatchTick;
+        LaunchCandidate plan = usablePlan(lateTicks, lateTicks >= AIM_WAIT_TICKS);
         if (plan != null && client.player.getOffHandStack().isOf(Items.WIND_CHARGE)) {
             useWithPlan(plan);
             usePendingOffhand();

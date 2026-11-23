@@ -51,11 +51,13 @@ public final class RenderPassBackdropEffect implements BackdropPass {
     }
 
     private void allocateLevels(int width, int height) {
+        int safeWidth = Math.max(1, width);
+        int safeHeight = Math.max(1, height);
         textures = new Texture[maximumPasses + 1];
         views = new TextureView[maximumPasses + 1];
         for (int level = 0; level <= maximumPasses; level++) {
             textures[level] = device.createTexture(TextureInfo.builder()
-                    .width(Math.max(1, width >> level)).height(Math.max(1, height >> level))
+                    .width(Math.max(1, safeWidth >> level)).height(Math.max(1, safeHeight >> level))
                     .format(TextureFormat.BGRA8Unorm).usage(9).mipCount(1).build());
             views[level] = textures[level].views[0];
         }

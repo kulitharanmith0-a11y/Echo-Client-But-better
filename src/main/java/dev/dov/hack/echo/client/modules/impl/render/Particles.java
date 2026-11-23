@@ -1,26 +1,25 @@
 package dev.dov.hack.echo.client.modules.impl.render;
 
-import dev.dov.hack.echo.client.EchoClient;
-import dev.dov.hack.echo.client.init.CatalogSettings;
-import dev.dov.hack.echo.client.init.CatalogText;
 import dev.dov.hack.echo.client.event.Subscribe;
 import dev.dov.hack.echo.client.event.lifecycle.ClientTickEvent;
-import dev.dov.hack.echo.client.modules.ModuleCategory;
+import dev.dov.hack.echo.client.event.render.WorldRenderEvent;
+import dev.dov.hack.echo.client.init.CatalogSettings;
+import dev.dov.hack.echo.client.init.CatalogText;
 import dev.dov.hack.echo.client.modules.Module;
+import dev.dov.hack.echo.client.modules.ModuleCategory;
 import dev.dov.hack.echo.client.modules.ModuleInfo;
 import dev.dov.hack.echo.client.particle.AnimatedParticle;
-import dev.dov.hack.echo.client.particle.ParticleManager;
+import dev.dov.hack.echo.client.render.world.WorldGeometry;
 import dev.dov.hack.echo.client.settings.BooleanSetting;
 import dev.dov.hack.echo.client.settings.ColorSetting;
 import dev.dov.hack.echo.client.settings.FloatSetting;
 import dev.dov.hack.echo.client.settings.IntSetting;
-import dev.dov.hack.echo.client.settings.Setting;
 import dev.dov.hack.echo.client.utils.MathRng;
-import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
-import java.util.Objects;
-import net.minecraft.client.MinecraftClient;
+import java.util.Iterator;
+import net.minecraft.client.render.Camera;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 
 public class Particles extends Module {
     public static Particles instance;
@@ -32,12 +31,11 @@ public class Particles extends Module {
     private static FloatSetting speed;
     private static BooleanSetting twinkle;
 
-    static {
-        MethodHandles.lookup().lookupClass();
-    }
-
     public Particles() {
-        super(new ModuleInfo(CatalogText.literal("Particles"), CatalogText.literal("Fills the world with ambient ember particles"), ModuleCategory.RENDER));
+        super(new ModuleInfo(
+                CatalogText.literal("Particles"),
+                CatalogText.literal("Fills the world with ambient glowing ember particles"),
+                ModuleCategory.RENDER));
     }
 
     public static void appendBootstrapSettings(Particles Module) {
@@ -49,7 +47,14 @@ public class Particles extends Module {
         CatalogSettings.append(Module, twinkle);
     }
 
-    public static void assignBootstrapSettings(Particles Module, ColorSetting preparedColor, IntSetting preparedRadius, FloatSetting preparedSpeed, IntSetting preparedDensity, BooleanSetting preparedTwinkle, FloatSetting preparedSize) {
+    public static void assignBootstrapSettings(
+            Particles Module,
+            ColorSetting preparedColor,
+            IntSetting preparedRadius,
+            FloatSetting preparedSpeed,
+            IntSetting preparedDensity,
+            BooleanSetting preparedTwinkle,
+            FloatSetting preparedSize) {
         color = preparedColor;
         radius = preparedRadius;
         speed = preparedSpeed;
@@ -60,146 +65,140 @@ public class Particles extends Module {
 
     @Override
     public void postInitialize() {
-        ArrayList<AnimatedParticle> freshParticles = new ArrayList<>();
-        initializeReferencedClass(ArrayList.class);
-        particles = freshParticles;
+        particles = new ArrayList<>();
         instance = this;
-        initializeReferencedClass(ColorSetting.class);
-        ColorSetting colorSetting = color;
-        initializeReferencedClass(Setting.class);
-        colorSetting.tooltip("Appearance");
-        initializeReferencedClass(FloatSetting.class);
-        FloatSetting sizeSetting = size;
-        initializeReferencedClass(Setting.class);
-        sizeSetting.tooltip("Appearance");
-        initializeReferencedClass(FloatSetting.class);
-        FloatSetting speedSetting = speed;
-        initializeReferencedClass(Setting.class);
-        speedSetting.tooltip("Timing");
+        color.tooltip("Appearance");
+        size.tooltip("Appearance");
+        speed.tooltip("Timing");
     }
 
     public static boolean isActive() {
-        boolean checkAvailability = Freecam.isPerspectiveRefreshEnabled();
-        if (checkAvailability) {
-            if (instance == null) return false;
-            if (!instance.isEnabled()) return false;
-        }
-        boolean outsideWorld = instance.isOutsideWorld();
-        return checkAvailability ? !outsideWorld : outsideWorld;
+        return instance != null && instance.isEnabled() && !instance.isOutsideWorld();
     }
 
-    public static float getSizeMultiplier() {
-        initializeReferencedClass(FloatSetting.class);
-        FloatSetting setting = size;
-        initializeReferencedClass(FloatSetting.class);
-        return setting.getValue();
-    }
-
-    public static float getSpeedMultiplier() {
-        initializeReferencedClass(FloatSetting.class);
-        FloatSetting setting = speed;
-        initializeReferencedClass(FloatSetting.class);
-        return setting.getValue();
-    }
-
-    public static boolean isPulsing() {
-        initializeReferencedClass(BooleanSetting.class);
-        BooleanSetting setting = twinkle;
-        initializeReferencedClass(BooleanSetting.class);
-        return setting.getValue();
-    }
-
-    public static int getRed() {
-        initializeReferencedClass(ColorSetting.class);
-        ColorSetting setting = color;
-        initializeReferencedClass(ColorSetting.class);
-        return setting.getRed();
-    }
-
-    public static int getGreen() {
-        initializeReferencedClass(ColorSetting.class);
-        ColorSetting setting = color;
-        initializeReferencedClass(ColorSetting.class);
-        return setting.getGreen();
-    }
-
-    public static int getBlue() {
-        initializeReferencedClass(ColorSetting.class);
-        ColorSetting setting = color;
-        initializeReferencedClass(ColorSetting.class);
-        return setting.getBlue();
-    }
-
-    public static int getAlpha() {
-        initializeReferencedClass(ColorSetting.class);
-        ColorSetting setting = color;
-        initializeReferencedClass(ColorSetting.class);
-        return setting.getAlpha();
-    }
+    public static float getSizeMultiplier() { return size != null ? size.getValue() : 1.0F; }
+    public static float getSpeedMultiplier() { return speed != null ? speed.getValue() : 1.0F; }
+    public static boolean isPulsing() { return twinkle != null && twinkle.getValue(); }
+    public static int getRed() { return color != null ? color.getRed() : 255; }
+    public static int getGreen() { return color != null ? color.getGreen() : 210; }
+    public static int getBlue() { return color != null ? color.getBlue() : 140; }
+    public static int getAlpha() { return color != null ? color.getAlpha() : 220; }
 
     @Subscribe
     private void onClientTick(ClientTickEvent event) {
-        boolean checkAvailability = Freecam.isPerspectiveRefreshEnabled();
-        if (checkAvailability && isOutsideWorld()) return;
-        initializeReferencedClass(ArrayList.class);
-        particles.removeIf(AnimatedParticle::isDead);
-        initializeReferencedClass(IntSetting.class);
-        IntSetting densitySetting = density;
-        initializeReferencedClass(IntSetting.class);
-        int desiredCount = densitySetting.getValue();
-        initializeReferencedClass(ArrayList.class);
-        int remaining = desiredCount - particles.size();
-        int spawnCount = remaining;
-        if (checkAvailability) {
-            if (remaining <= 0) return;
-            spawnCount = Math.min(remaining, Math.max(1, desiredCount / 40));
+        if (isOutsideWorld() || particles == null) {
+            return;
         }
-        initializeReferencedClass(MinecraftClient.class);
+        particles.removeIf(AnimatedParticle::isDead);
+        int desiredCount = Math.max(1, density.getValue());
+        int remaining = desiredCount - particles.size();
+        if (remaining <= 0) {
+            return;
+        }
+        int spawnCount = Math.min(remaining, Math.max(2, desiredCount / 18));
         double playerX = client.player.getX();
-        initializeReferencedClass(MinecraftClient.class);
         double playerY = client.player.getY();
-        initializeReferencedClass(MinecraftClient.class);
         double playerZ = client.player.getZ();
-        initializeReferencedClass(IntSetting.class);
-        IntSetting radiusSetting = radius;
-        initializeReferencedClass(IntSetting.class);
-        int spawnRadius = radiusSetting.getValue();
+        int spawnRadius = Math.max(4, radius.getValue());
+
         for (int index = 0; index < spawnCount; index++) {
             for (int attempt = 0; attempt < 4; attempt++) {
                 double angle = MathRng.randomDouble(0.0, Math.PI * 2.0);
                 double distance = Math.sqrt(MathRng.randomDouble(0.0, 1.0)) * spawnRadius;
                 double x = playerX + Math.cos(angle) * distance;
-                double y = playerY + MathRng.randomDouble(-6.0, 14.0);
-                if (!checkAvailability) return;
+                double y = playerY + MathRng.randomDouble(-4.0, 12.0);
                 double z = playerZ + Math.sin(angle) * distance;
-                initializeReferencedClass(MinecraftClient.class);
-                if (!client.world.getBlockState(BlockPos.ofFloored(x, y, z)).isAir()) continue;
-                AnimatedParticle particle = new AnimatedParticle(x, y, z);
-                initializeReferencedClass(ArrayList.class);
-                particles.add(particle);
-                initializeReferencedClass(ParticleManager.class);
-                ParticleManager manager = EchoClient.particleManager;
-                initializeReferencedClass(ParticleManager.class);
-                manager.add(particle);
+                if (!client.world.getBlockState(BlockPos.ofFloored(x, y, z)).isAir()) {
+                    continue;
+                }
+                particles.add(new AnimatedParticle(x, y, z));
                 break;
             }
         }
     }
 
+    @Subscribe
+    private void onWorldRender(WorldRenderEvent event) {
+        if (isOutsideWorld() || particles == null || particles.isEmpty()) {
+            return;
+        }
+        Camera camera = event.getCamera();
+        if (camera == null) {
+            return;
+        }
+        WorldGeometry geometry = event.getRenderContext().getDepthTestedGeometry();
+        float yaw = camera.getYaw();
+        float pitch = camera.getPitch();
+        Vec3d right = Vec3d.fromPolar(0.0F, yaw + 90.0F).normalize();
+        Vec3d up = Vec3d.fromPolar(pitch - 90.0F, yaw).normalize();
+        float tickProgress = event.getTickProgress();
+
+        Iterator<AnimatedParticle> it = particles.iterator();
+        while (it.hasNext()) {
+            AnimatedParticle p = it.next();
+            p.tick(tickProgress);
+            if (p.isDead()) {
+                it.remove();
+                continue;
+            }
+            int argb = p.color;
+            int alpha = (argb >>> 24) & 0xFF;
+            if (alpha <= 2) {
+                continue;
+            }
+            double half = Math.max(0.025, p.getSize());
+            double glowHalf = half * 1.9;
+            int glowArgb = ((alpha / 3) << 24) | (argb & 0x00FFFFFF);
+
+            double rx = right.x;
+            double ry = right.y;
+            double rz = right.z;
+            double ux = up.x;
+            double uy = up.y;
+            double uz = up.z;
+            double px = p.x;
+            double py = p.y;
+            double pz = p.z;
+
+            // Outer soft glow diamond
+            drawBillboardQuad(geometry, px, py, pz, rx, ry, rz, ux, uy, uz, glowHalf, glowArgb);
+            // Bright crisp ember core
+            drawBillboardQuad(geometry, px, py, pz, rx, ry, rz, ux, uy, uz, half, argb);
+        }
+    }
+
+    private static void drawBillboardQuad(
+            WorldGeometry geometry,
+            double cx, double cy, double cz,
+            double rx, double ry, double rz,
+            double ux, double uy, double uz,
+            double half,
+            int color) {
+        double x1 = cx + (-rx - ux) * half;
+        double y1 = cy + (-ry - uy) * half;
+        double z1 = cz + (-rz - uz) * half;
+
+        double x2 = cx + (rx - ux) * half;
+        double y2 = cy + (ry - uy) * half;
+        double z2 = cz + (rz - uz) * half;
+
+        double x3 = cx + (rx + ux) * half;
+        double y3 = cy + (ry + uy) * half;
+        double z3 = cz + (rz + uz) * half;
+
+        double x4 = cx + (-rx + ux) * half;
+        double y4 = cy + (-ry + uy) * half;
+        double z4 = cz + (-rz + uz) * half;
+
+        geometry.drawTriangle(x1, y1, z1, color, x2, y2, z2, color, x3, y3, z3, color);
+        geometry.drawTriangle(x1, y1, z1, color, x3, y3, z3, color, x4, y4, z4, color);
+    }
+
     @Override
     public void onDisable() {
         super.onDisable();
-        MethodHandles.lookup();
-        initializeReferencedClass(ArrayList.class);
-        Objects.requireNonNull(particles, "object reference is null").clear();
-    }
-
-    
-    private static void initializeReferencedClass(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
+        if (particles != null) {
+            particles.clear();
         }
     }
 }

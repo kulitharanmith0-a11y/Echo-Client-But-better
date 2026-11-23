@@ -25,7 +25,8 @@ public class OpenGlTextureView extends TextureView {
                 GL30C.glTexImage2D(texture.target, baseMipLevel, texture.internalFormat, width, height, 0, texture.pixelFormat, texture.pixelType, (ByteBuffer) null);
             }
         }
-        if (texture.immutableStorage && GL.getCapabilities().OpenGL43) {
+        var caps = GL.getCapabilities();
+        if (texture.immutableStorage && caps != null && caps.OpenGL43 && caps.glTextureView != 0L) {
             int previousTexture = GL30C.glGetInteger(OpenGlTexture.bindingQuery(texture.target));
             int viewId = GL30C.glGenTextures();
             GL43C.glTextureView(viewId, texture.target, texture.textureId, texture.internalFormat, baseMipLevel, mipCount, 0, 1);

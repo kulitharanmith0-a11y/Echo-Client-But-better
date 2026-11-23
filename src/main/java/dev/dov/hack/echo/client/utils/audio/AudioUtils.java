@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import net.minecraft.sound.SoundCategory;
 import org.lwjgl.openal.AL10;
+import org.lwjgl.openal.ALC10;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.stb.STBVorbisInfo;
 import org.lwjgl.system.MemoryStack;
@@ -140,17 +141,36 @@ public final class AudioUtils implements MinecraftAccess {
 
     
     public static void shutdown() {
-        for (int source : playingSources) {
-            AL10.alSourceStop(source);
-            AL10.alDeleteSources(source);
+        playbackRequests.clear();
+        boolean hasContext = false;
+        try {
+            hasContext = ALC10.alcGetCurrentContext() != 0L;
+        } catch (Throwable ignored) {
+        }
+        if (hasContext) {
+            for (int source : playingSources) {
+                try {
+                    AL10.alSourceStop(source);
+                    AL10.alDeleteSources(source);
+                } catch (Throwable ignored) {
+                }
+            }
+            for (int buffer : audioBuffers.values()) {
+                try {
+                    AL10.alDeleteBuffers(buffer);
+                } catch (Throwable ignored) {
+                }
+            }
         }
         playingSources.clear();
-        for (int buffer : audioBuffers.values()) {
-            AL10.alDeleteBuffers(buffer);
-        }
         audioBuffers.clear();
         for (PcmAudio audio : decodedAudio.values()) {
-            MemoryUtil.memFree((java.nio.Buffer) audio.samples());
+            try {
+                if (audio != null && audio.samples() != null) {
+                    MemoryUtil.memFree((java.nio.Buffer) audio.samples());
+                }
+            } catch (Throwable ignored) {
+            }
         }
         decodedAudio.clear();
         buffersInitialized = false;

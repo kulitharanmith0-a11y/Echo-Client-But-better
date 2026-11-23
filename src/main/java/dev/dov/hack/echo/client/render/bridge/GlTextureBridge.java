@@ -24,22 +24,27 @@ public final class GlTextureBridge {
         return importView(device, source, TextureFormat.BGRA8Unorm);
     }
 
+    private static TextureView importStorage(RenderDevice device, GpuTextureView source, TextureFormat format) {
+        if (source == null || source.texture() == null) {
+            return null;
+        }
+        int width = Math.max(1, source.getWidth(0));
+        int height = Math.max(1, source.getHeight(0));
+        if (device instanceof OpenGlDevice openGl && source.texture() instanceof GlTexture texture) {
+            return openGl.importTextureView(texture.getGlId(), width, height, format, GlConst.toGlInternalId(texture.getFormat()));
+        }
+        return null;
+    }
+
     public static TextureView importView(RenderDevice device, GpuTextureView source, TextureFormat format) {
         TextureView view = importStorage(device, source, format);
+        if (view == null) {
+            return null;
+        }
         view.access = format.depth ? TextureAccess.DEPTH_ATTACHMENT : TextureAccess.COLOR_ATTACHMENT;
         view.layout = TextureLayout.GENERAL;
         view.stages = format.depth ? DEPTH_ATTACHMENT_STAGE : COLOR_ATTACHMENT_STAGE;
         view.yFlipped = isYFlipped();
         return view;
-    }
-
-    private static TextureView importStorage(RenderDevice device, GpuTextureView source, TextureFormat format) {
-        int width = source.getWidth(0);
-        int height = source.getHeight(0);
-        if (device instanceof OpenGlDevice openGl) {
-            GlTexture texture = (GlTexture) source.texture();
-            return openGl.importTextureView(texture.getGlId(), width, height, format, GlConst.toGlInternalId(texture.getFormat()));
-        }
-        throw new IllegalStateException("Vulkan is only supported on 26.2+");
     }
 }

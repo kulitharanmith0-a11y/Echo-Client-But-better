@@ -105,17 +105,68 @@ public final class MovementSimulation implements MinecraftAccess {
 
     public static int firstImpactTick(List<FallSample> samples, LivingEntity target, double minimumFallDistance) {
         CollisionPrediction prediction = collisionPrediction(target);
+        FallSample previous = null;
         for (FallSample sample : samples) {
-            if (sample.isFalling() && sample.fallDistance() > minimumFallDistance && withinAttackRange(sample, prediction)) {
+            if (sample.isFalling() && sample.fallDistance() > minimumFallDistance
+                    && withinAttackRange(sample, previous, prediction)) {
+                return sample.tick();
+            }
+            // High fall speed tunneling guard: if this tick landed on the ground after falling fast,
+            // check if the swept path from the previous airborne tick passed through attack range.
+            if (sample.onGround() && previous != null && previous.isFalling()) {
+                double stepDrop = Math.max(0.0, previous.eyePosition().y - sample.eyePosition().y);
+                if (stepDrop > 0.85 && previous.fallDistance() + stepDrop * 0.5 > minimumFallDistance
+                        && sweptWithinAttackRange(previous, sample, prediction, attackRange() * 0.96)) {
+                    return previous.tick();
+                }
+            }
+            previous = sample;
+        }
+        return -1;
+    }
+
+    public static int ticksUntilGround(List<FallSample> samples) {
+        if (samples == null || samples.isEmpty()) {
+            return -1;
+        }
+        for (FallSample sample : samples) {
+            if (sample.onGround()) {
                 return sample.tick();
             }
         }
         return -1;
     }
 
-    private static boolean withinAttackRange(FallSample sample, CollisionPrediction prediction) {
-        double range = attackRange() * (sample.tick() == 0 ? 1.0 : 0.9);
-        return prediction.predictClamped(sample.tick()).squaredMagnitude(sample.eyePosition()) <= range * range;
+    private static boolean withinAttackRange(FallSample sample, FallSample previous, CollisionPrediction prediction) {
+        double range = attackRange() * (sample.tick() == 0 ? 1.0 : 0.96);
+        if (prediction.predictClamped(sample.tick()).squaredMagnitude(sample.eyePosition()) <= range * range) {
+            return true;
+        }
+        if (previous != null && previous.eyePosition().squaredDistanceTo(sample.eyePosition()) > 1.0) {
+            return sweptWithinAttackRange(previous, sample, prediction, range);
+        }
+        return false;
+    }
+
+    private static boolean sweptWithinAttackRange(FallSample from, FallSample to, CollisionPrediction prediction, double range) {
+        double rangeSq = range * range;
+        Box fromBox = prediction.predictClamped(from.tick());
+        Box toBox = prediction.predictClamped(to.tick());
+        for (int step = 1; step <= 3; step++) {
+            double t = step * 0.25;
+            Vec3d eye = from.eyePosition().lerp(to.eyePosition(), t);
+            Box box = new Box(
+                    fromBox.minX + (toBox.minX - fromBox.minX) * t,
+                    fromBox.minY + (toBox.minY - fromBox.minY) * t,
+                    fromBox.minZ + (toBox.minZ - fromBox.minZ) * t,
+                    fromBox.maxX + (toBox.maxX - fromBox.maxX) * t,
+                    fromBox.maxY + (toBox.maxY - fromBox.maxY) * t,
+                    fromBox.maxZ + (toBox.maxZ - fromBox.maxZ) * t);
+            if (box.squaredMagnitude(eye) <= rangeSq) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean canHitWithinWindow(List<FallSample> samples, LivingEntity target, double minimumFallDistance, double horizontalDistance, TickWindow window) {
@@ -124,19 +175,23 @@ public final class MovementSimulation implements MinecraftAccess {
     }
 
     private static boolean canHitWithinWindow(List<FallSample> samples, CollisionPrediction prediction, double minimumFallDistance, double horizontalDistance, double attackRange, TickWindow window) {
-        for (FallSample first : samples) {
+        for (int i = 0; i < samples.size(); i++) {
+            FallSample first = samples.get(i);
+            FallSample prevFirst = i > 0 ? samples.get(i - 1) : null;
             if (first.tick() < window.firstTick() || first.tick() + window.pairedTickOffset() > window.lastTick()) {
                 continue;
             }
-            if (!canHit(first, prediction, minimumFallDistance, horizontalDistance, attackRange)) {
+            if (!canHit(first, prevFirst, prediction, minimumFallDistance, horizontalDistance, attackRange)) {
                 continue;
             }
             if (window.pairedTickOffset() == 0) {
                 return true;
             }
-            for (FallSample paired : samples) {
+            for (int j = i; j < samples.size(); j++) {
+                FallSample paired = samples.get(j);
+                FallSample prevPaired = j > 0 ? samples.get(j - 1) : null;
                 if (paired.tick() == first.tick() + window.pairedTickOffset()
-                        && canHit(paired, prediction, minimumFallDistance, horizontalDistance, attackRange)) {
+                        && canHit(paired, prevPaired, prediction, minimumFallDistance, horizontalDistance, attackRange)) {
                     return true;
                 }
             }
@@ -144,13 +199,16 @@ public final class MovementSimulation implements MinecraftAccess {
         return false;
     }
 
-    private static boolean canHit(FallSample sample, CollisionPrediction prediction, double minimumFallDistance, double horizontalDistance, double attackRange) {
+    private static boolean canHit(FallSample sample, FallSample previous, CollisionPrediction prediction, double minimumFallDistance, double horizontalDistance, double attackRange) {
         if (!sample.isFalling() || sample.fallDistance() <= minimumFallDistance) {
             return false;
         }
         Box bounds = prediction.predict(sample.tick());
-        double range = attackRange * 0.9;
-        if (bounds.squaredMagnitude(sample.eyePosition()) > range * range) {
+        double range = attackRange * 0.96;
+        boolean inReach = bounds.squaredMagnitude(sample.eyePosition()) <= range * range
+                || (previous != null && previous.eyePosition().squaredDistanceTo(sample.eyePosition()) > 1.0
+                && sweptWithinAttackRange(previous, sample, prediction, range));
+        if (!inReach) {
             return false;
         }
         double x = sample.eyePosition().x - Math.max(bounds.minX, Math.min(sample.eyePosition().x, bounds.maxX));

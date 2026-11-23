@@ -7,7 +7,11 @@ import net.minecraft.client.MinecraftClient;
 public final class GlFramebufferBridge implements GlFramebufferAccess {
     @Override
     public int depthInternalFormat() {
-        return GlConst.toGlInternalId(MinecraftClient.getInstance().getFramebuffer().getDepthAttachment().getFormat());
+        var client = MinecraftClient.getInstance();
+        if (client == null || client.getFramebuffer() == null || client.getFramebuffer().getDepthAttachment() == null) {
+            return 36012;
+        }
+        return GlConst.toGlInternalId(client.getFramebuffer().getDepthAttachment().getFormat());
     }
 
     @Override

@@ -24,13 +24,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class HeldItemRendererMixin {
     @Inject(method = "renderItem(FLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/command/OrderedRenderCommandQueue;Lnet/minecraft/client/network/ClientPlayerEntity;I)V", at = @At("HEAD"))
     private void beginHandChams(float tickProgress, MatrixStack matrices, OrderedRenderCommandQueue queue, ClientPlayerEntity player, int light, CallbackInfo callback) {
-        HandChamsRenderer.beginCapture();
+        if (!EchoClient.eventsDisabled) {
+            HandChamsRenderer.beginCapture();
+        }
     }
 
     @Inject(method = "renderItem(FLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/command/OrderedRenderCommandQueue;Lnet/minecraft/client/network/ClientPlayerEntity;I)V", at = @At("RETURN"))
     private void finishHandChams(float tickProgress, MatrixStack matrices, OrderedRenderCommandQueue queue, ClientPlayerEntity player, int light, CallbackInfo callback) {
-        HandChamsRenderer.endCapture();
-        HandChamsRenderer.flushCapturedOutlines();
+        if (!EchoClient.eventsDisabled) {
+            HandChamsRenderer.endCapture();
+            HandChamsRenderer.flushCapturedOutlines();
+        }
     }
 
     @Inject(method = "renderFirstPersonItem(Lnet/minecraft/client/network/AbstractClientPlayerEntity;FFLnet/minecraft/util/Hand;FLnet/minecraft/item/ItemStack;FLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/command/OrderedRenderCommandQueue;I)V", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/util/math/MatrixStack;push()V", shift = At.Shift.AFTER))

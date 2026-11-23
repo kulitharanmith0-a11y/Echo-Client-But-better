@@ -243,10 +243,22 @@ public final class VoxelBatch implements RenderBatch, SectionUpdateListener {
         }
     }
 
+    private boolean destroyed;
+
     @Override
     public void destroy() {
-        meshStorage.destroy();
-        device.release(paletteUniforms);
-        MemoryUtil.nmemFree(pushConstants);
+        if (destroyed) {
+            return;
+        }
+        destroyed = true;
+        if (meshStorage != null) {
+            meshStorage.destroy();
+        }
+        if (paletteUniforms != null) {
+            device.release(paletteUniforms);
+        }
+        if (pushConstants != 0L) {
+            MemoryUtil.nmemFree(pushConstants);
+        }
     }
 }

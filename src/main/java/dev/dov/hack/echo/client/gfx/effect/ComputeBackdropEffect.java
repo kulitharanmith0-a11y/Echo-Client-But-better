@@ -46,7 +46,7 @@ public final class ComputeBackdropEffect implements BackdropPass {
     }
 
     private void allocateMipTexture(int width, int height) {
-        mipTexture = device.createTexture(TextureInfo.builder().width(width).height(height)
+        mipTexture = device.createTexture(TextureInfo.builder().width(Math.max(1, width)).height(Math.max(1, height))
                 .format(TextureFormat.RGBA8Unorm).usage(3).mipCount(maximumPasses + 1).build());
     }
 

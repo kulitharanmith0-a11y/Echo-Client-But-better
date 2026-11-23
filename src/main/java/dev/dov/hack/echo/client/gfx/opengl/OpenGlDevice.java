@@ -32,7 +32,15 @@ public class OpenGlDevice extends RenderDevice {
     public OpenGlDevice(GlFramebufferAccess framebuffers, ResourceLoader resources, DeviceCapabilities NativeCapabilities) {
         super(resources, NativeCapabilities);
         this.framebuffers = framebuffers;
-        glslVersion = glGetInteger(GL_MAJOR_VERSION) * 100 + glGetInteger(GL_MINOR_VERSION) * 10;
+        int major = glGetInteger(GL_MAJOR_VERSION);
+        int minor = glGetInteger(GL_MINOR_VERSION);
+        int rawVersion = major * 100 + minor * 10;
+        if (rawVersion < 330) {
+            rawVersion = 330;
+        } else if (rawVersion > 460) {
+            rawVersion = 460;
+        }
+        glslVersion = rawVersion;
         baseInstanceSupported = GL.getCapabilities().glDrawArraysInstancedBaseInstance != 0;
     }
 
@@ -65,8 +73,15 @@ public class OpenGlDevice extends RenderDevice {
 
     public static DeviceCapabilities queryCapabilities(boolean reversedDepth) {
         int version = glGetInteger(GL_MAJOR_VERSION) * 100 + glGetInteger(GL_MINOR_VERSION) * 10;
-        boolean gl43 = version >= 430;
-        return new DeviceCapabilities(gl43, gl43, false, version >= 420, reversedDepth);
+        var caps = GL.getCapabilities();
+        boolean hasStorageImages = version >= 420 && caps != null && caps.OpenGL42
+                && caps.glTexStorage2D != 0L && caps.glTexStorage3D != 0L
+                && caps.glBindImageTexture != 0L && caps.glMemoryBarrier != 0L;
+        boolean hasCompute = version >= 430 && hasStorageImages && caps.OpenGL43
+                && caps.glDispatchCompute != 0L && caps.glTextureView != 0L;
+        boolean hasMultiDrawIndirect = version >= 430 && caps != null && caps.OpenGL43
+                && caps.glMultiDrawArraysIndirect != 0L;
+        return new DeviceCapabilities(hasMultiDrawIndirect, hasCompute, false, hasStorageImages, reversedDepth);
     }
 
     @Override public boolean isVulkan() { return false; }

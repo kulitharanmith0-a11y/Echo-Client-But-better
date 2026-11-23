@@ -68,23 +68,23 @@ public class SelfDestruct extends Module {
         if (destructionStarted || EchoClient.eventsDisabled) {
             return;
         }
-        initializeClass(ModuleConfig.class);
-        if (EchoClient.ModuleConfig != null) {
-            try {
-                EchoClient.ModuleConfig.save("_autosave");
-            } catch (RuntimeException ignored) {
-            }
-        }
         destructionStarted = true;
-        EchoClient.eventsDisabled = true;
-        EchoClient.hideExternalRendererOverlay();
-        initializeClass(ScreenManager.class);
-        if (EchoClient.screenManager != null) {
-            EchoClient.screenManager.close();
+        try {
+            initializeClass(ModuleConfig.class);
+            if (EchoClient.ModuleConfig != null) {
+                EchoClient.ModuleConfig.save("_autosave");
+            }
+        } catch (Throwable ignored) {
         }
-        initializeClass(MinecraftClient.class);
-        if (client != null) {
-            client.send(this::finishSelfDestruct);
+        EchoClient.eventsDisabled = true;
+        try {
+            EchoClient.hideExternalRendererOverlay();
+        } catch (Throwable ignored) {
+        }
+        ScreenManager.focusedSetting = null;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc != null) {
+            mc.send(this::finishSelfDestruct);
         } else {
             finishSelfDestruct();
         }
@@ -94,8 +94,14 @@ public class SelfDestruct extends Module {
         String protectedUsername = resolveSessionUsername();
 
         Set<String> preCollectedStrings = Collections.newSetFromMap(new IdentityHashMap<>());
-        NameRegistry.collectAssignedNames(preCollectedStrings);
-        HudRenderer.INSTANCE.collectKeybindIds(preCollectedStrings);
+        try {
+            NameRegistry.collectAssignedNames(preCollectedStrings);
+        } catch (Throwable ignored) {
+        }
+        try {
+            HudRenderer.INSTANCE.collectKeybindIds(preCollectedStrings);
+        } catch (Throwable ignored) {
+        }
 
         List<Class<?>> seedClasses = List.of(
                 EchoClient.class,
@@ -120,11 +126,18 @@ public class SelfDestruct extends Module {
                 WeakRefSet.class);
         List<Object> seedObjects = collectSeedObjects();
 
-        ClientStringCleanup cleanup = new ClientStringCleanup(EchoClient.class);
-        ClientStringCleanup.CleanupPlan cleanupPlan = cleanup.collectPlan(seedClasses, seedObjects, preCollectedStrings);
+        ClientStringCleanup.CleanupPlan cleanupPlan = null;
+        try {
+            ClientStringCleanup cleanup = new ClientStringCleanup(EchoClient.class);
+            cleanupPlan = cleanup.collectPlan(seedClasses, seedObjects, preCollectedStrings);
+        } catch (Throwable ignored) {
+        }
 
         if (replaceMods != null && replaceMods.getValue()) {
-            replaceModFiles();
+            try {
+                replaceModFiles();
+            } catch (Throwable ignored) {
+            }
         }
 
         closeUiAndScreens();
@@ -135,33 +148,42 @@ public class SelfDestruct extends Module {
         if (EchoClient.ModuleConfig != null) {
             try {
                 EchoClient.ModuleConfig.close();
-            } catch (RuntimeException ignored) {
+            } catch (Throwable ignored) {
             }
             EchoClient.ModuleConfig = null;
         }
-        HudRenderer.INSTANCE.resetTransientState();
-        NameRegistry.clearAssignments();
-
-        for (ClientCleanupAction action : cleanupPlan.actions()) {
-            try {
-                action.clear();
-            } catch (RuntimeException ignored) {
-            }
+        try {
+            HudRenderer.INSTANCE.resetTransientState();
+        } catch (Throwable ignored) {
         }
-        cleanupPlan.actions().clear();
+        try {
+            NameRegistry.clearAssignments();
+        } catch (Throwable ignored) {
+        }
 
+        if (cleanupPlan != null) {
+            for (ClientCleanupAction action : cleanupPlan.actions()) {
+                try {
+                    action.clear();
+                } catch (Throwable ignored) {
+                }
+            }
+            cleanupPlan.actions().clear();
+            try {
+                ClientStringCleanup.clearCollectedStrings(
+                        cleanupPlan.heapStrings(), cleanupPlan.literalStrings(), protectedUsername);
+            } catch (Throwable ignored) {
+            }
+            cleanupPlan.heapStrings().clear();
+            cleanupPlan.literalStrings().clear();
+        }
         clearSystemProperties();
-        ClientStringCleanup.clearCollectedStrings(
-                cleanupPlan.heapStrings(), cleanupPlan.literalStrings(), protectedUsername);
-        cleanupPlan.heapStrings().clear();
-        cleanupPlan.literalStrings().clear();
         preCollectedStrings.clear();
 
         replaceMods = null;
         url = null;
         EchoClient.instance = null;
         EchoClient.frameNumber = 0L;
-        System.gc();
     }
 
     private List<Object> collectSeedObjects() {
@@ -193,88 +215,108 @@ public class SelfDestruct extends Module {
             try {
                 EchoClient.screenManager.close();
                 EchoClient.screenManager.destroy();
-            } catch (RuntimeException ignored) {
+            } catch (Throwable ignored) {
             }
             EchoClient.screenManager = null;
         }
     }
 
     private void shutdownManagersAndModules() {
-        if (EchoClient.handlerManager != null) {
-            try {
-                EchoClient.handlerManager.shutdown();
-            } catch (RuntimeException ignored) {
-            }
-            EchoClient.handlerManager = null;
-        }
         if (EchoClient.ModuleManager != null) {
             try {
                 EchoClient.ModuleManager.shutdownExcept(this);
-            } catch (RuntimeException ignored) {
+            } catch (Throwable ignored) {
             }
             EchoClient.ModuleManager = null;
         }
-        EventBus.unregister(this);
-        setEnabled(false);
-        setKey(InputKey.NONE);
-        setVisible(false);
-        setHoldMode(false);
-        settings.clear();
-        if (url != null) {
-            url.setText("");
-            url.setPlaceholder("");
-            url.clearEntries();
-            url.description("");
-            url.tooltip("");
+        if (EchoClient.handlerManager != null) {
+            try {
+                EchoClient.handlerManager.shutdown();
+            } catch (Throwable ignored) {
+            }
+            EchoClient.handlerManager = null;
+        }
+        try {
+            EventBus.unregister(this);
+            setEnabled(false);
+            setKey(InputKey.NONE);
+            setVisible(false);
+            setHoldMode(false);
+            settings.clear();
+            if (url != null) {
+                url.setText("");
+                url.setPlaceholder("");
+                url.clearEntries();
+                url.description("");
+                url.tooltip("");
+            }
+        } catch (Throwable ignored) {
         }
         if (EchoClient.friendManager != null) {
-            EchoClient.friendManager.clear();
+            try {
+                EchoClient.friendManager.clear();
+            } catch (Throwable ignored) {
+            }
             EchoClient.friendManager = null;
         }
         if (EchoClient.ChunkController != null) {
-            EchoClient.ChunkController.shutdown();
-            EchoClient.ChunkController.setListener(null);
+            try {
+                EchoClient.ChunkController.shutdown();
+                EchoClient.ChunkController.setListener(null);
+            } catch (Throwable ignored) {
+            }
             EchoClient.ChunkController = null;
         }
         if (EchoClient.ChunkScanManager != null) {
-            EchoClient.ChunkScanManager.shutdown();
+            try {
+                EchoClient.ChunkScanManager.shutdown();
+            } catch (Throwable ignored) {
+            }
             EchoClient.ChunkScanManager = null;
         }
         if (EchoClient.particleManager != null) {
-            EchoClient.particleManager.clear();
-            EchoClient.particleManager.setTexture(null);
+            try {
+                EchoClient.particleManager.clear();
+                EchoClient.particleManager.setTexture(null);
+            } catch (Throwable ignored) {
+            }
             EchoClient.particleManager = null;
         }
         if (EchoClient.scriptManager != null) {
-            EchoClient.scriptManager.loadedScripts().clear();
+            try {
+                EchoClient.scriptManager.loadedScripts().clear();
+            } catch (Throwable ignored) {
+            }
             EchoClient.scriptManager = null;
         }
         EchoClient.scriptEngine = null;
     }
 
     private void releaseGpuAndAudioResources() {
-        EchoClient.shutdownExternalRenderer();
-        AudioUtils.shutdown();
-        FullscreenEffects.releaseResources();
-        HandChamsRenderer.reset();
-        HintRenderer.reset();
-        HudRenderer.INSTANCE.releaseRendererResources();
+        try { EchoClient.shutdownExternalRenderer(); } catch (Throwable ignored) {}
+        try { AudioUtils.shutdown(); } catch (Throwable ignored) {}
+        try { FullscreenEffects.releaseResources(); } catch (Throwable ignored) {}
+        try { HandChamsRenderer.reset(); } catch (Throwable ignored) {}
+        try { HintRenderer.reset(); } catch (Throwable ignored) {}
+        try { HudRenderer.INSTANCE.releaseRendererResources(); } catch (Throwable ignored) {}
 
         StringMemoryAccess memory = StringMemoryAccess.create();
-        releaseDashboardResources(memory);
-        releaseEntityPreviewRenderer(memory);
+        try { releaseDashboardResources(memory); } catch (Throwable ignored) {}
+        try { releaseEntityPreviewRenderer(memory); } catch (Throwable ignored) {}
 
         if (EchoClient.uiRenderer != null) {
-            releaseUiRendererExtras(EchoClient.uiRenderer, memory);
-            EchoClient.uiRenderer.clearFrameQueues();
-            EchoClient.uiRenderer.destroy();
+            UiRenderer ui = EchoClient.uiRenderer;
             EchoClient.uiRenderer = null;
+            try { releaseUiRendererExtras(ui, memory); } catch (Throwable ignored) {}
+            try { ui.clearFrameQueues(); } catch (Throwable ignored) {}
+            try { ui.destroy(); } catch (Throwable ignored) {}
         }
         if (EchoClient.worldRenderer != null) {
-            EchoClient.worldRenderer.clearExternalOverlays();
-            EchoClient.worldRenderer.destroy();
-            releaseWorldRendererExtras(EchoClient.worldRenderer, EchoClient.renderDevice, memory);
+            WorldRenderContext world = EchoClient.worldRenderer;
             EchoClient.worldRenderer = null;
+            try { world.clearExternalOverlays(); } catch (Throwable ignored) {}
+            try { world.destroy(); } catch (Throwable ignored) {}
+            try { releaseWorldRendererExtras(world, EchoClient.renderDevice, memory); } catch (Throwable ignored) {}
         }
         EchoClient.commandEncoder = null;
         EchoClient.renderDevice = null;
@@ -365,12 +407,13 @@ public class SelfDestruct extends Module {
     }
 
     private static void clearEventAndInputCaches() {
-        EventBus.clear();
-        DeferredActionQueue.clear();
-        KeybindingCache.clearOverrides();
-        TargetSelection.clearTargets();
-        KeybindingEvent.setInputSentinel(null);
-        EntityAttackEvent.setAttackSentinel(null);
+        try { EventBus.clear(); } catch (Throwable ignored) {}
+        try { DeferredActionQueue.clear(); } catch (Throwable ignored) {}
+        try { KeybindingCache.clearOverrides(); } catch (Throwable ignored) {}
+        try { KeyStateOverrides.clearAll(); } catch (Throwable ignored) {}
+        try { TargetSelection.clearTargets(); } catch (Throwable ignored) {}
+        try { KeybindingEvent.setInputSentinel(null); } catch (Throwable ignored) {}
+        try { EntityAttackEvent.setAttackSentinel(null); } catch (Throwable ignored) {}
     }
 
     private static void clearSystemProperties() {

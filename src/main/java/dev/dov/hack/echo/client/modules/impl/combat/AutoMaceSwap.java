@@ -59,16 +59,19 @@ import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.BlocksAttacksComponent;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerRespawnS2CPacket;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 
 /**
  * Combined legit mace combat module unifying Auto Mace diving/aim/elytra logic
@@ -187,6 +190,8 @@ public class AutoMaceSwap extends Module {
     private boolean requireSameTarget;
     private boolean attackPending;
     private long lastSwapTick;
+    private boolean wasSmashReady;
+    private int lockedAimTargetId = -1;
 
     public AutoMaceSwap() {
         super(new ModuleInfo(literal("Auto Mace Swap"), literal("Automatically swaps to a mace and attacks"), ModuleCategory.COMBAT));
@@ -327,9 +332,11 @@ public class AutoMaceSwap extends Module {
         LivingEntity stunTarget = activeStunTarget();
         boolean equipmentUnequipping = hasEquipmentSwap(false)
                 && (!silentRotations.getValue() || !client.player.isGliding());
+        double approachSpeed = client.player.getVelocity().length();
         boolean airborneMace = !client.player.isGliding() && !client.player.isOnGround()
                 && !client.player.isTouchingWater() && !client.player.isClimbing()
-                && (client.player.getVelocity().y < 0.0 || InventoryItems.mainHandStack().isOf(Items.MACE));
+                && (client.player.getVelocity().y < 0.05 || approachSpeed >= 0.85
+                || InventoryItems.mainHandStack().isOf(Items.MACE));
         if (stunTarget == null && !equipmentUnequipping && !airborneMace) {
             releaseOrCancelRotation();
             return;
@@ -353,23 +360,48 @@ public class AutoMaceSwap extends Module {
             releaseOrCancelRotation();
             return;
         }
+        int predictionHorizon = approachSpeed >= 1.0 ? AIM_PREDICTION_TICKS + 2 : AIM_PREDICTION_TICKS;
         MaceImpactPrediction prediction = (stunTarget != null || client.player.isGliding())
-                ? null : predictImpact(AIM_PREDICTION_TICKS);
+                ? null : predictImpact(predictionHorizon);
         LivingEntity target = stunTarget != null ? stunTarget : selectAimTarget();
         if (target == null && prediction != null) {
             LivingEntity predictedTarget = TargetSelection.resolveTarget(prediction.target());
             Vec3d eye = client.player.getCameraPosVec(1.0F);
-            double rangeSquared = range.getValue() * range.getValue();
-            if (isWithinAimBounds(eye, rangeSquared, predictedTarget)) {
+            double effectiveRange = effectiveAimRange();
+            if (isWithinAimBounds(eye, effectiveRange * effectiveRange, predictedTarget)) {
                 target = predictedTarget;
             }
         }
         if (target == null) {
+            lockedAimTargetId = -1;
             releaseOrCancelRotation();
             return;
         }
-        boolean accepted = rotations().aim(this, RotationPriority.HIGH, target,
-                effectiveAimPointSettings(target), rotationSettings(target));
+        lockedAimTargetId = target.getId();
+        boolean accepted;
+        Vec3d eye = client.player.getCameraPosVec(1.0F);
+        Box targetBox = target.getBoundingBox();
+        double reachMargin = MovementSimulation.attackRange() + 0.35;
+        boolean outsideImmediateReach = targetBox.squaredMagnitude(eye) > reachMargin * reachMargin;
+        double dx = target.getX() - eye.x;
+        double dz = target.getZ() - eye.z;
+        boolean directlyOverhead = (dx * dx + dz * dz) < 0.72 * 0.72 && eye.y > targetBox.maxY - 0.1;
+        if (directlyOverhead) {
+            // Aim smoothly at the upper center surface when directly overhead to prevent 180-degree yaw spin.
+            Vec3d topPoint = new Vec3d(
+                    MathHelper.clamp(eye.x, targetBox.minX + 0.08, targetBox.maxX - 0.08),
+                    targetBox.maxY - 0.12,
+                    MathHelper.clamp(eye.z, targetBox.minZ + 0.08, targetBox.maxZ - 0.08));
+            accepted = rotations().aim(this, RotationPriority.HIGH, topPoint, rotationSettings(target));
+        } else if (prediction != null && prediction.target() == target && prediction.impactTick() >= 1
+                && outsideImmediateReach && approachSpeed >= 0.75) {
+            int leadTicks = Math.min(2, prediction.impactTick());
+            accepted = rotations().aim(this, RotationPriority.HIGH,
+                    MovementSimulation.predictedAimPoint(target, leadTicks), rotationSettings(target));
+        } else {
+            accepted = rotations().aim(this, RotationPriority.HIGH, target,
+                    effectiveAimPointSettings(target), rotationSettings(target));
+        }
         if (!accepted) {
             releaseOrCancelRotation();
         }
@@ -387,13 +419,21 @@ public class AutoMaceSwap extends Module {
                 clearScheduledSwap();
                 clearStunAwait(false);
             }
+            wasSmashReady = false;
             return;
         }
         if (!client.player.isAlive()) {
             resetFlightState(true);
             resetSwapState();
+            wasSmashReady = false;
             return;
         }
+        boolean smashNow = isSmashReady();
+        if (smashNow && !wasSmashReady) {
+            // Fresh smash fall just crossed threshold: never block the opening smash with a stale CPS delay.
+            attackDelayMillis = 0L;
+        }
+        wasSmashReady = smashNow;
         updateDive();
 
         if (!stunSlam.getValue()) {
@@ -470,7 +510,9 @@ public class AutoMaceSwap extends Module {
                     && !DeferredActionQueue.hasPendingActions() && scheduledMaceSlot == -1
                     && stunAwaitTargetId == -1 && axeAwaitTargetId == -1
                     && client.player.age > releaseWaitUntilTick) {
-                tryScheduleAutoAttack();
+                if (!tryScheduleAutoAttack()) {
+                    tryPreSwapOnFastApproach();
+                }
             }
         }
         if (pendingHotbarSlot == -1 || event.slot != pendingHotbarSlot) {
@@ -521,7 +563,7 @@ public class AutoMaceSwap extends Module {
                 clearStunAwait(true);
             } else if (InventoryItems.mainHandStack().isOf(Items.MACE) && isCrosshairTargetValid(targetId)) {
                 Targets.shieldBreakActive = true;
-                triggerAttack(event);
+                triggerAttack(event, crosshairLivingTarget());
                 return;
             }
             return;
@@ -533,7 +575,7 @@ public class AutoMaceSwap extends Module {
                 clearAxeAwait(true);
             } else if (InventoryItems.holdsAxe() && isCrosshairTargetValid(targetId)) {
                 Targets.shieldBreakActive = true;
-                if (triggerAttack(event)) {
+                if (triggerAttack(event, crosshairLivingTarget())) {
                     pendingAxeTargetId = targetId;
                     clearAxeAwait(false);
                 }
@@ -550,8 +592,9 @@ public class AutoMaceSwap extends Module {
             resetPendingAttack();
             boolean holdingExpected = isAxe ? InventoryItems.holdsAxe()
                     : InventoryItems.mainHandStack().isOf(Items.MACE);
+            LivingEntity resolvedTarget = crosshairLivingTarget();
             boolean validTarget = !checkTarget || isCrosshairTargetValid(targetId);
-            if (recent && holdingExpected && validTarget && triggerAttack(event)) {
+            if (recent && holdingExpected && validTarget && triggerAttack(event, resolvedTarget)) {
                 if (isAxe) {
                     pendingAxeTargetId = targetId;
                     Targets.shieldBreakActive = true;
@@ -601,13 +644,13 @@ public class AutoMaceSwap extends Module {
             return;
         }
         LivingEntity target = attackTarget();
-        if (target == null || !attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
+        if (target == null || !isAttackTimerReady()) {
             return;
         }
         if (isBlockingTarget(target)) {
             if (stunSlam.getValue() && autoAxeStun.getValue() && InventoryItems.holdsAxe()
                     && checkStunReactionElapsed(target)) {
-                if (triggerAttack(event)) {
+                if (triggerAttack(event, target)) {
                     blockingObservations.remove(target.getId());
                     pendingAxeTargetId = target.getId();
                     Targets.shieldBreakActive = true;
@@ -618,7 +661,7 @@ public class AutoMaceSwap extends Module {
         int bestMace = findTargetMaceSlot();
         boolean holdingMace = InventoryItems.mainHandStack().isOf(Items.MACE);
         if (holdingMace && (bestMace == -1 || bestMace == client.player.getInventory().getSelectedSlot())) {
-            if (triggerAttack(event)) {
+            if (triggerAttack(event, target)) {
                 resetAttackTimer();
             }
         }
@@ -677,6 +720,11 @@ public class AutoMaceSwap extends Module {
             return;
         }
         int ticks = Math.max(1, Math.round(stunSwitchDelay.sampleGaussian()));
+        int airTicks = MovementSimulation.ticksUntilGround(MovementSimulation.fallSamples(0));
+        if (airTicks > 0 && airTicks <= ticks) {
+            // Avoid waiting past ground touchdown at high fall speed while staying strictly >= 1 tick apart.
+            ticks = Math.max(1, airTicks - 1);
+        }
         scheduledMaceSlot = slot;
         scheduledTargetId = target.getId();
         scheduledSwapTick = client.player.age + ticks;
@@ -712,13 +760,13 @@ public class AutoMaceSwap extends Module {
         }
     }
 
-    private void tryScheduleAutoAttack() {
+    private boolean tryScheduleAutoAttack() {
         if (client.player.isUsingItem() && InventoryItems.isSpear(client.player.getActiveItem().getItem())) {
-            return;
+            return false;
         }
         LivingEntity target = attackTarget();
         if (target == null) {
-            return;
+            return false;
         }
         if (isBlockingTarget(target)) {
             boolean stunWindowReady = isSmashReady() || predictStunSmashReady(target);
@@ -734,18 +782,19 @@ public class AutoMaceSwap extends Module {
                     attackPending = true;
                     lastSwapTick = client.player.age;
                     Targets.shieldBreakActive = true;
+                    return true;
                 } else if (!InventoryItems.holdsAxe() && canInitiateHotbarSwap()) {
-                    scheduleAxeStun(target, true);
+                    return scheduleAxeStun(target, true);
                 }
             }
-            return;
+            return false;
         }
-        if (!isSmashReady() || !attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
-            return;
+        if (!isSmashReady() || !isAttackTimerReady()) {
+            return false;
         }
         if (requestMaceSwap(target)) {
             resetAttackTimer();
-            return;
+            return true;
         }
         int bestMace = findTargetMaceSlot();
         boolean holdingMace = InventoryItems.mainHandStack().isOf(Items.MACE);
@@ -760,6 +809,59 @@ public class AutoMaceSwap extends Module {
             attackPending = true;
             lastSwapTick = client.player.age;
             resetAttackTimer();
+            return true;
+        }
+        return false;
+    }
+
+    private void tryPreSwapOnFastApproach() {
+        if (client.player.isOnGround() || client.player.isGliding() || client.player.isUsingItem()) {
+            return;
+        }
+        double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+        double totalSpeed = client.player.getVelocity().length();
+        if (fallSpeed < 0.85 && totalSpeed < 1.0) {
+            return;
+        }
+        if (!canInitiateHotbarSwap()) {
+            return;
+        }
+        MaceImpactPrediction prediction = predictImpact(2);
+        if (prediction == null || prediction.impactTick() < 1 || prediction.impactTick() > 2) {
+            return;
+        }
+        LivingEntity incoming = TargetSelection.resolveTarget(prediction.target());
+        if (incoming == null || !TargetSelection.isValidTarget(incoming)) {
+            return;
+        }
+        if (stunSlam.getValue() && autoAxeStun.getValue() && isBlockingTarget(incoming)
+                && checkStunReactionElapsed(incoming)) {
+            if (!InventoryItems.holdsAxe()) {
+                int axeSlot = InventoryItems.findStackInHotbar(InventoryItems::isAxe);
+                if (axeSlot != -1 && !suspendItemUse()) {
+                    preSwapSlot = client.player.getInventory().getSelectedSlot();
+                    int ticks = Math.max(4, Math.round(stunSwitchDelay.getUpper()) + AXE_AWAIT_WINDOW_TICKS + 2);
+                    if (DeferredActionQueue.select(this, axeSlot, ticks, false, null)) {
+                        enterAxeAwait(incoming.getId());
+                    }
+                }
+            }
+            return;
+        }
+        if (!isBlockingTarget(incoming) && !InventoryItems.mainHandStack().isOf(Items.MACE) && fallSpeed >= 1.05) {
+            double projectedFall = ServerFallDistanceTracker.fallDistance(client.player) + fallSpeed;
+            if (isSmashReady() || projectedFall > fallDistance.getValue()) {
+                int maceSlot = findTargetMaceSlot();
+                if (maceSlot == -1) {
+                    maceSlot = InventoryItems.findMaceWithEnchantmentInHotbar(null, true);
+                }
+                if (maceSlot != -1 && maceSlot != client.player.getInventory().getSelectedSlot() && !suspendItemUse()) {
+                    preSwapSlot = client.player.getInventory().getSelectedSlot();
+                    DeferredActionQueue.select(this, maceSlot,
+                            Math.max(3, (int) delay.sampleGaussian() + 2),
+                            returnTo.isSelected(RETURN_ORIGINAL), this::onSwapEnded);
+                }
+            }
         }
     }
 
@@ -953,14 +1055,37 @@ public class AutoMaceSwap extends Module {
                 returnTo.isSelected(RETURN_ORIGINAL), this::onSwapEnded);
     }
 
-    private boolean triggerAttack(AttackKeyEvent event) {
+    private boolean triggerAttack(AttackKeyEvent event, LivingEntity resolvedTarget) {
         if (client.attackCooldown > 0) {
             return false;
         }
-        if (actions().requestAttackClick(this, event)) {
+        boolean vanillaCrosshairMatches = client.crosshairTarget instanceof EntityHitResult hit
+                && (resolvedTarget == null || hit.getEntity() == resolvedTarget);
+        if (vanillaCrosshairMatches) {
+            if (actions().requestAttackClick(this, event)) {
+                return true;
+            }
+            return event.hasClicks() && actions().canAttack(this, crosshairLivingTarget(), false);
+        }
+        if (resolvedTarget != null && resolvedTarget.isAlive() && !resolvedTarget.isRemoved()) {
+            return actions().executeEntityAttack(this, resolvedTarget, true).succeeded();
+        }
+        return false;
+    }
+
+    private boolean isAttackTimerReady() {
+        if (attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
             return true;
         }
-        return event.hasClicks() && actions().canAttack(this, crosshairLivingTarget(), false);
+        if (client.player != null && !client.player.isOnGround() && client.attackCooldown <= 0
+                && !actions().hasAttackedThisTick()) {
+            double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+            double totalSpeed = client.player.getVelocity().length();
+            if (fallSpeed >= 0.95 || totalSpeed >= 1.2) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void enterStunAwait(int targetId) {
@@ -1156,10 +1281,11 @@ public class AutoMaceSwap extends Module {
     }
 
     private boolean isCrosshairTargetValid(int targetId) {
-        if (targetId < 0 || !(client.crosshairTarget instanceof EntityHitResult hit)) {
+        if (targetId < 0) {
             return false;
         }
-        return hit.getEntity().getId() == targetId && hit.getEntity() instanceof LivingEntity target
+        LivingEntity target = crosshairLivingTarget();
+        return target != null && target.getId() == targetId
                 && target.isAlive() && !target.isRemoved() && TargetSelection.isValidTarget(target);
     }
 
@@ -1399,10 +1525,11 @@ public class AutoMaceSwap extends Module {
             return false;
         }
         double targetRange = MathHelper.clamp(elytraRange.getValue(), 3.0, 6.0);
-        double rangeSquared = targetRange * targetRange;
+        double maxApproach = targetRange + client.player.getVelocity().length() * EQUIPMENT_FINISH_TICK;
+        double rangeSquared = maxApproach * maxApproach;
         Vec3d eye = client.player.getEyePos();
         Box bounds = MovementSimulation.sampleBounds(immediate).union(MovementSimulation.sampleBounds(delayed))
-                .union(client.player.getBoundingBox().expand(targetRange));
+                .union(client.player.getBoundingBox().expand(maxApproach));
         double minimumFall = Math.max(MINIMUM_SMASH_DISTANCE, fallDistance.getValue());
         for (LivingEntity target : predictionTargets(bounds)) {
             if (target.getBoundingBox().squaredMagnitude(eye) > rangeSquared) {
@@ -1427,11 +1554,11 @@ public class AutoMaceSwap extends Module {
             return false;
         }
         double targetRange = MathHelper.clamp(elytraRange.getValue(), 3.0, 6.0);
-        double maxApproach = targetRange + client.player.getVelocity().length() * EQUIPMENT_USE_TICK;
+        double maxApproach = targetRange + client.player.getVelocity().length() * (EQUIPMENT_FINISH_TICK + 1);
         double maxApproachSquared = maxApproach * maxApproach;
         Vec3d eye = client.player.getEyePos();
         Box bounds = MovementSimulation.sampleBounds(first).union(MovementSimulation.sampleBounds(second))
-                .union(client.player.getBoundingBox().expand(targetRange));
+                .union(client.player.getBoundingBox().expand(maxApproach));
         double minimumFall = Math.max(MINIMUM_SMASH_DISTANCE, fallDistance.getValue());
         int lastTick = Math.round(lateWindow.getValue());
         for (LivingEntity target : predictionTargets(bounds)) {
@@ -1517,10 +1644,25 @@ public class AutoMaceSwap extends Module {
         clearEquipmentSwapState();
     }
 
+    private double effectiveAimRange() {
+        double base = range.getValue();
+        if (client.player == null || client.player.isOnGround()) {
+            return base;
+        }
+        double speed = client.player.getVelocity().length();
+        return base + Math.min(6.0, speed * 2.5);
+    }
+
     private LivingEntity selectAimTarget() {
-        double targetRange = range.getValue();
+        double targetRange = effectiveAimRange();
         double rangeSquared = targetRange * targetRange;
         Vec3d eye = client.player.getCameraPosVec(1.0F);
+        // Sticky target lock while airborne diving so passing overhead never drops or swaps target mid-dive
+        if (lockedAimTargetId != -1 && !client.player.isOnGround()
+                && client.world.getEntityById(lockedAimTargetId) instanceof LivingEntity locked
+                && isWithinAimBounds(eye, rangeSquared, locked)) {
+            return locked;
+        }
         Box searchBox = client.player.getBoundingBox().expand(targetRange + 1.0);
         List<LivingEntity> candidates = client.world.getEntitiesByClass(
                 LivingEntity.class, searchBox, entity -> isAimCandidate(eye, rangeSquared, entity));
@@ -1537,7 +1679,9 @@ public class AutoMaceSwap extends Module {
         AimPointMode mode = aimVector.isSelected(CLOSEST) ? AimPointMode.CLOSEST : AimPointMode.STRAIGHT;
         boolean useRandom = random.getValue();
         LivingEntity stunTarget = activeStunTarget();
-        if (stunTarget != null && target != null && stunTarget.getId() == target.getId()) {
+        boolean highSpeedDive = client.player != null && !client.player.isOnGround()
+                && (client.player.getVelocity().y <= -0.85 || client.player.getVelocity().length() >= 1.0);
+        if ((stunTarget != null && target != null && stunTarget.getId() == target.getId()) || highSpeedDive) {
             mode = AimPointMode.CLOSEST;
             useRandom = false;
         } else if (silentRotations.getValue() && target != null && client.player != null && mode == AimPointMode.STRAIGHT) {
@@ -1554,19 +1698,28 @@ public class AutoMaceSwap extends Module {
 
     private RotationSettings rotationSettings(LivingEntity target) {
         boolean silent = silentRotations.getValue();
-        float hSpeed = horizontalSpeed.getValue() * 20.0F;
-        float vSpeed = verticalSpeed.getValue() * 20.0F;
+        float hSpeed = horizontalSpeed.getValue() * 32.0F;
+        float vSpeed = verticalSpeed.getValue() * 36.0F;
         AimTransition transition = aimTransition();
-        if (silent && transition != AimTransition.SNAP && client.player != null) {
-            boolean stunActive = activeStunTarget() != null;
-            boolean urgent = stunActive || isSmashReady() || hasEquipmentSwap(false) || attackPending;
-            if (!urgent && target != null) {
-                double reach = MovementSimulation.attackRange() + 1.5;
-                urgent = target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F)) <= reach * reach;
+        if (transition != AimTransition.SNAP && client.player != null) {
+            double speed = client.player.getVelocity().length();
+            double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+            float velocityBoost = (float) MathHelper.clamp(1.0 + Math.max(speed - 0.35, fallSpeed - 0.30) * 1.35, 1.0, 3.0);
+            if (silent) {
+                boolean stunActive = activeStunTarget() != null;
+                boolean urgent = stunActive || isSmashReady() || hasEquipmentSwap(false) || attackPending;
+                if (!urgent && target != null) {
+                    double reach = MovementSimulation.attackRange() + 1.5;
+                    urgent = target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F)) <= reach * reach;
+                }
+                float scale = (stunActive ? 3.5F : urgent ? 2.6F : 1.75F) * velocityBoost;
+                hSpeed *= scale;
+                vSpeed *= scale;
+            } else {
+                float visibleBoost = MathHelper.clamp(velocityBoost, 1.0F, 2.4F);
+                hSpeed *= visibleBoost;
+                vSpeed *= visibleBoost;
             }
-            float scale = stunActive ? 3.5F : urgent ? 2.5F : 1.6F;
-            hSpeed *= scale;
-            vSpeed *= scale;
         }
         return new RotationSettings(silent ? RotationVisibility.SILENT : RotationVisibility.VISIBLE,
                 transition, hSpeed, vSpeed);
@@ -1595,13 +1748,50 @@ public class AutoMaceSwap extends Module {
     }
 
     private LivingEntity crosshairLivingTarget() {
-        if (client.crosshairTarget == null || client.crosshairTarget.getType() != HitResult.Type.ENTITY) {
+        if (client.crosshairTarget instanceof EntityHitResult entityHit
+                && entityHit.getEntity() instanceof LivingEntity target
+                && target.isAlive() && !target.isRemoved()) {
+            return target;
+        }
+        // High fall speed / grand velocity fallback: if vanilla crosshairTarget is 1-frame stale,
+        // verify a live raycast along our active effective rotation strictly within vanilla reach.
+        if (autoAim.getValue() && client.player != null && client.world != null && rotations().isOwnedBy(this)) {
+            return raycastEffectiveRotationTarget();
+        }
+        return null;
+    }
+
+    private LivingEntity raycastEffectiveRotationTarget() {
+        var effective = rotations().effectiveRotation();
+        if (effective == null) {
             return null;
         }
-        if (!(((EntityHitResult) client.crosshairTarget).getEntity() instanceof LivingEntity target)) {
-            return null;
+        double reach = client.player.getEntityInteractionRange();
+        Vec3d start = client.player.getCameraPosVec(1.0F);
+        Vec3d look = Vec3d.fromPolar(effective.pitch(), effective.yaw());
+        Vec3d end = start.add(look.multiply(reach));
+        Vec3d limitedEnd = end;
+        if (!throughWalls.getValue()) {
+            BlockHitResult blockHit = client.world.raycast(new RaycastContext(
+                    start, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
+            if (blockHit != null && blockHit.getType() == HitResult.Type.BLOCK) {
+                limitedEnd = blockHit.getPos();
+            }
         }
-        return !target.isAlive() || target.isRemoved() ? null : target;
+        double maxDistSq = start.squaredDistanceTo(limitedEnd);
+        EntityHitResult hit = ProjectileUtil.raycast(
+                client.player,
+                start,
+                limitedEnd,
+                client.player.getBoundingBox().stretch(limitedEnd.subtract(start)).expand(1.0),
+                entity -> entity instanceof LivingEntity living && !entity.isSpectator()
+                        && entity.canHit() && living.isAlive() && !living.isRemoved()
+                        && TargetSelection.isValidTarget(living),
+                maxDistSq);
+        if (hit != null && hit.getEntity() instanceof LivingEntity living) {
+            return living;
+        }
+        return null;
     }
 
     private boolean canUseMace() {

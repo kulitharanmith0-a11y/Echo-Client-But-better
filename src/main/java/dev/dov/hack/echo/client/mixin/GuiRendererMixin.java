@@ -70,7 +70,10 @@ public abstract class GuiRendererMixin implements Platform.GuiLoop {
             if (MinecraftRenderState.getScreen() instanceof ClientScreen) {
                 EchoClient.uiRenderer.updateBackdrop(EchoClient.commandEncoder);
             }
-            EchoClient.uiRenderer.renderPendingItems();
+            try {
+                EchoClient.uiRenderer.renderPendingItems();
+            } catch (Throwable ignored) {
+            }
             PlayerPreviewRenderer.beginFrame();
             if (!echo$shouldDeferHud() && MinecraftRenderState.hasOverlay()) {
                 echo$renderHud(false);
@@ -130,6 +133,9 @@ public abstract class GuiRendererMixin implements Platform.GuiLoop {
     @Unique
     private void echo$renderHud(boolean updateBackdrop) {
         UiRenderer renderer = EchoClient.uiRenderer;
+        if (EchoClient.eventsDisabled || renderer == null || EchoClient.commandEncoder == null) {
+            return;
+        }
         if (updateBackdrop) {
             renderer.updateBackdrop();
         }

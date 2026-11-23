@@ -208,7 +208,10 @@ public final class HudRenderer {
         if (MinecraftRenderState.getScreen() != null || MinecraftRenderState.isHudHidden()) return;
         for (Module Module : ModuleManager.allFeatures()) {
             if (Module instanceof HudElement element && element.isEnabled()) {
-                element.render(createLayout(event.getRenderer(), event.getTexture(), element.getScale(), element.getOpacity()));
+                try {
+                    element.render(createLayout(event.getRenderer(), event.getTexture(), element.getScale(), element.getOpacity()));
+                } catch (Throwable ignored) {
+                }
             }
         }
     }

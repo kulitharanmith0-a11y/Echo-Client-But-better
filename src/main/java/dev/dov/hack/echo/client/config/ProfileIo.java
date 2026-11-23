@@ -62,25 +62,46 @@ public final class ProfileIo implements AutoCloseable {
 
     
     public CompletableFuture<JsonObject> listProfilesAsync() {
+        if (executor.isShutdown()) {
+            return CompletableFuture.completedFuture(null);
+        }
         return CompletableFuture.supplyAsync(this::listProfiles, executor);
     }
 
     
     public void execute(Runnable operation) {
-        executor.execute(operation);
+        if (executor.isShutdown() || operation == null) {
+            return;
+        }
+        try {
+            executor.execute(operation);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        }
     }
 
     
     public <T> CompletableFuture<T> submit(Supplier<T> operation) {
-        return CompletableFuture.supplyAsync(operation, executor);
+        if (executor.isShutdown() || operation == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        try {
+            return CompletableFuture.supplyAsync(operation, executor);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     private <T> T call(Supplier<T> operation) {
+        if (executor.isShutdown()) {
+            return null;
+        }
         if (Thread.currentThread() == ioThread) {
             return operation.get();
         }
         try {
             return executor.submit(operation::get).get();
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            return null;
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             return null;

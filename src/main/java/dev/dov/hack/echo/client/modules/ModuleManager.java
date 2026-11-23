@@ -93,7 +93,7 @@ public class ModuleManager {
             }
             try {
                 feature.setEnabled(false);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
             EventBus.unregister(feature);
             feature.settings.clear();

@@ -14,6 +14,7 @@ public class OpenGlBuffer extends Buffer {
     private final boolean explicitFlush;
     private long dirtyStart = Long.MAX_VALUE;
     private long dirtyEnd;
+    private boolean destroyed;
 
     public OpenGlBuffer(int usage, long size, boolean dynamic, boolean mapped, boolean explicitFlush) {
         super(usage, size, dynamic, mapped, 1);
@@ -72,7 +73,15 @@ public class OpenGlBuffer extends Buffer {
 
     @Override
     public void destroy() {
-        GL15C.glDeleteBuffers(bufferId);
-        if (mappedAddress != 0) MemoryUtil.nmemFree(mappedAddress);
+        if (destroyed) {
+            return;
+        }
+        destroyed = true;
+        if (bufferId != 0) {
+            GL15C.glDeleteBuffers(bufferId);
+        }
+        if (mappedAddress != 0) {
+            MemoryUtil.nmemFree(mappedAddress);
+        }
     }
 }

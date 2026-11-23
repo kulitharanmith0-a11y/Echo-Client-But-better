@@ -55,28 +55,38 @@ public final class MinecraftItemAtlasSurface {
 
     
     public void renderTile(KeyedItemRenderState state, int x, int y, int tileSize, boolean clearExisting) {
+        if (color == null || colorView == null || depth == null || depthView == null || state == null) {
+            return;
+        }
         int bottom = y + tileSize;
         if (clearExisting) {
             RenderSystem.getDevice().createCommandEncoder().clearColorAndDepthTextures(
                     color, 0, depth, 1.0, x, SIZE - bottom, tileSize, tileSize);
         }
+        GpuTextureView previousColorOverride = RenderSystem.outputColorTextureOverride;
+        GpuTextureView previousDepthOverride = RenderSystem.outputDepthTextureOverride;
+        RenderSystem.backupProjectionMatrix();
         matrices.push();
-        matrices.translate(x + tileSize / 2.0F, y + tileSize / 2.0F, 0.0F);
-        matrices.scale(tileSize, -tileSize, tileSize);
-        RenderSystem.outputColorTextureOverride = colorView;
-        RenderSystem.outputDepthTextureOverride = depthView;
-        RenderSystem.setProjectionMatrix(projection.set(SIZE, SIZE), ProjectionType.ORTHOGRAPHIC);
-        RenderSystem.enableScissorForRenderTypeDraws(x, SIZE - bottom, tileSize, tileSize);
-        MinecraftClient client = MinecraftClient.getInstance();
-        client.gameRenderer.getDiffuseLighting().setShaderLights(
-                state.isSideLit() ? DiffuseLighting.Type.ITEMS_3D : DiffuseLighting.Type.ITEMS_FLAT);
-        state.render(matrices, client.gameRenderer.getEntityRenderCommandQueue(), 15728880, OverlayTexture.DEFAULT_UV, 0);
-        client.gameRenderer.getEntityRenderDispatcher().render();
-        client.getBufferBuilders().getEntityVertexConsumers().draw();
-        RenderSystem.disableScissorForRenderTypeDraws();
-        RenderSystem.outputColorTextureOverride = null;
-        RenderSystem.outputDepthTextureOverride = null;
-        matrices.pop();
+        try {
+            matrices.translate(x + tileSize / 2.0F, y + tileSize / 2.0F, 0.0F);
+            matrices.scale(tileSize, -tileSize, tileSize);
+            RenderSystem.outputColorTextureOverride = colorView;
+            RenderSystem.outputDepthTextureOverride = depthView;
+            RenderSystem.setProjectionMatrix(projection.set(SIZE, SIZE), ProjectionType.ORTHOGRAPHIC);
+            RenderSystem.enableScissorForRenderTypeDraws(x, SIZE - bottom, tileSize, tileSize);
+            MinecraftClient client = MinecraftClient.getInstance();
+            client.gameRenderer.getDiffuseLighting().setShaderLights(
+                    state.isSideLit() ? DiffuseLighting.Type.ITEMS_3D : DiffuseLighting.Type.ITEMS_FLAT);
+            state.render(matrices, client.gameRenderer.getEntityRenderCommandQueue(), 15728880, OverlayTexture.DEFAULT_UV, 0);
+            client.gameRenderer.getEntityRenderDispatcher().render();
+            client.getBufferBuilders().getEntityVertexConsumers().draw();
+        } finally {
+            RenderSystem.disableScissorForRenderTypeDraws();
+            RenderSystem.outputColorTextureOverride = previousColorOverride;
+            RenderSystem.outputDepthTextureOverride = previousDepthOverride;
+            RenderSystem.restoreProjectionMatrix();
+            matrices.pop();
+        }
     }
 
     

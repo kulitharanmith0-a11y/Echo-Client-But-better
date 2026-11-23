@@ -1,4 +1,5 @@
 package dev.dov.hack.echo.client.mixin;
+import dev.dov.hack.echo.client.EchoClient;
 import dev.dov.hack.echo.client.platform.Platform;
 
 import net.minecraft.client.gui.DrawContext;
@@ -12,6 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class ScreenMixin {
     @Inject(method = "renderWithTooltip", at = @At("HEAD"))
     private void onRenderWithTooltipHead(DrawContext context, int mouseX, int mouseY, float tickProgress, CallbackInfo callback) {
-        ((Platform.GuiState) context.state).markScreenLayerStart();
+        if (!EchoClient.eventsDisabled) {
+            ((Platform.GuiState) context.state).markScreenLayerStart();
+        }
     }
 }

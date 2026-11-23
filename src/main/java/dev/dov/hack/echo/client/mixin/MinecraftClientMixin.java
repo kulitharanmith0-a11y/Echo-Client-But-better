@@ -87,7 +87,7 @@ public class MinecraftClientMixin {
     @Inject(method = "render", at = @At("HEAD"))
     private void beforeFrame(boolean tick, CallbackInfo callback) {
         EchoClient.beginRenderFrame();
-        if (MinecraftClient.getInstance().world != null) {
+        if (!EchoClient.eventsDisabled && MinecraftClient.getInstance().world != null) {
             EventBus.post(new FrameStartEvent());
         }
     }
@@ -245,32 +245,32 @@ public class MinecraftClientMixin {
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 2))
     private void beforeHotbarKey(CallbackInfo callback) {
-        KeybindingEvents.onHotbarSlot();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onHotbarSlot();
     }
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 7))
     private void beforeSwapHandsKey(CallbackInfo callback) {
-        KeybindingEvents.onSwapHands();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onSwapHands();
     }
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 8))
     private void beforeDropKey(CallbackInfo callback) {
-        KeybindingEvents.onDrop();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onDrop();
     }
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 14))
     private void beforeAttackKey(CallbackInfo callback) {
-        KeybindingEvents.onAttack();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onAttack();
     }
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 15))
     private void beforeUseKey(CallbackInfo callback) {
-        KeybindingEvents.onUse();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onUse();
     }
 
     @Inject(method = "handleInputEvents", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/KeyBinding;wasPressed()Z", ordinal = 16))
     private void beforePickBlockKey(CallbackInfo callback) {
-        KeybindingEvents.onPickBlock();
+        if (!EchoClient.eventsDisabled) KeybindingEvents.onPickBlock();
     }
 
     @Inject(method = "handleInputEvents", at = @At("RETURN"))
@@ -317,6 +317,9 @@ public class MinecraftClientMixin {
 
     @Inject(method = "hasOutline", at = @At("RETURN"), cancellable = true)
     private void queryEntityOutline(Entity entity, CallbackInfoReturnable<Boolean> callback) {
+        if (EchoClient.eventsDisabled) {
+            return;
+        }
         EntityOutlineEvent event = new EntityOutlineEvent(entity, callback.getReturnValueZ());
         event.post();
         if (event.isOutlined() != callback.getReturnValueZ()) {

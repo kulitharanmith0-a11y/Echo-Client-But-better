@@ -47,13 +47,24 @@ public class ItemTextureCache {
         return state;
     }
 
+    private static Object normalizeModelKey(Object rawKey, ItemStack fallback) {
+        if (rawKey instanceof List<?> list) {
+            return new java.util.ArrayList<>(list);
+        }
+        return rawKey != null ? rawKey : fallback.getItem();
+    }
+
     public Entry request(ItemStack stack, LivingEntity entity, int seed) {
         if (stack == null || stack.isEmpty() || MinecraftClient.getInstance().world == null || entity == null) {
             return null;
         }
-        List<?> key = List.copyOf((List<?>) createRenderState(stack, entity, seed).getModelKey());
-        requests.putIfAbsent(key, new Request(stack.copy(), entity, seed));
-        return entries.get(key);
+        try {
+            Object key = normalizeModelKey(createRenderState(stack, entity, seed).getModelKey(), stack);
+            requests.putIfAbsent(key, new Request(stack.copy(), entity, seed));
+            return entries.get(key);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     public void clear() {
@@ -61,31 +72,37 @@ public class ItemTextureCache {
     }
 
     public void flush() {
-        entries.clear();
         if (requests.isEmpty()) {
             return;
         }
         ensureAtlas();
+        if (atlasTexture == null || tileSize <= 0) {
+            requests.clear();
+            return;
+        }
         int columns = ATLAS_SIZE / tileSize;
         float uvSize = tileSize / (float) ATLAS_SIZE;
         for (Map.Entry<Object, Request> queued : requests.entrySet()) {
-            Request request = queued.getValue();
-            KeyedItemRenderState state = createRenderState(request.stack(), request.entity(), request.seed());
-            Integer slot = slots.get(queued.getKey());
-            boolean newSlot = slot == null;
-            if (newSlot) {
-                if (slots.size() >= columns * columns) {
-                    continue;
+            try {
+                Request request = queued.getValue();
+                KeyedItemRenderState state = createRenderState(request.stack(), request.entity(), request.seed());
+                Integer slot = slots.get(queued.getKey());
+                boolean newSlot = slot == null;
+                if (newSlot) {
+                    if (slots.size() >= columns * columns) {
+                        continue;
+                    }
+                    slot = slots.size();
+                    slots.put(queued.getKey(), slot);
                 }
-                slot = slots.size();
-                slots.put(queued.getKey(), slot);
+                if (newSlot || state.isAnimated()) {
+                    surface.renderTile(state, slot % columns * tileSize, slot / columns * tileSize, tileSize, !newSlot);
+                }
+                float left = slot % columns * uvSize;
+                float top = 1.0F - slot / columns * uvSize;
+                entries.put(queued.getKey(), new Entry(atlasTexture, left, top, left + uvSize, top - uvSize));
+            } catch (Throwable ignored) {
             }
-            if (newSlot || state.isAnimated()) {
-                surface.renderTile(state, slot % columns * tileSize, slot / columns * tileSize, tileSize, !newSlot);
-            }
-            float left = slot % columns * uvSize;
-            float top = 1.0F - slot / columns * uvSize;
-            entries.put(queued.getKey(), new Entry(atlasTexture, left, top, left + uvSize, top - uvSize));
         }
         requests.clear();
     }

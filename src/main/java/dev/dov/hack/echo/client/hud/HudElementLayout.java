@@ -163,7 +163,6 @@ public final class HudElementLayout {
         float alpha = globalOpacity * effectOpacity;
         boolean hotbar = element == HudElementType.HOTBAR;
         if (hud.inventoryPlayer() == null || stack == null || stack.isEmpty()) return;
-        if (hotbar && !hud.replacesVanillaHotbar()) return;
         if (!hotbar && alpha <= 0.36f) return;
         ItemRenderPlacement placement = HudRenderer.itemPlacement(toScreenX(x), toScreenY(y), toScreenLength(size), 2.0f);
         float drawX = placement.x();
@@ -186,7 +185,6 @@ public final class HudElementLayout {
         float alpha = globalOpacity * effectOpacity;
         boolean hotbar = element == HudElementType.HOTBAR;
         if (text == null || text.isEmpty()) return;
-        if (hotbar && !hud.replacesVanillaHotbar()) return;
         if (!hotbar && alpha <= 0.36f) return;
         renderer.drawMinecraftText(text, toScreenX(x), toScreenY(y), toScreenLength(size) * 8.0f / 9.0f, HudRenderer.multiplyAlpha(color, alpha));
     }

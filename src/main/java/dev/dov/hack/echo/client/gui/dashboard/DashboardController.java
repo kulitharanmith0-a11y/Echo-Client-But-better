@@ -632,6 +632,7 @@ public final class DashboardController {
 
     
     private void acceptConfigMetadata(List<StoreMeta> profiles) {
+        if (profiles == null) return;
         try {
             configCards.clear();
             for (StoreMeta metadata : profiles) {
@@ -701,13 +702,22 @@ public final class DashboardController {
     
     @Subscribe
     public void onHudRender(HudRenderEvent event) {
-        if (!(MinecraftRenderState.getScreen() instanceof DashboardScreen)) return;
+        if (EchoClient.eventsDisabled || !(MinecraftRenderState.getScreen() instanceof DashboardScreen)) return;
         UiRenderer renderer = event.getRenderer();
+        if (renderer == null) return;
+        if (svgTextures == null && EchoClient.renderDevice != null) {
+            try {
+                initialize(EchoClient.renderDevice);
+            } catch (Throwable ignored) {
+            }
+        }
+        float width = guiWidth();
+        float height = guiHeight();
+        if (width <= 0.0f || height <= 0.0f) return;
+        try {
         refreshData();
         updateCanvas();
         updateFrameClock();
-        float width = guiWidth();
-        float height = guiHeight();
         ui.beginFrame(width, height, 1920.0f, 1080.0f);
         animations.beginFrame(System.nanoTime() / 1.0e9, deltaSeconds);
         layoutSidebarRows();
@@ -728,7 +738,9 @@ public final class DashboardController {
         backdrop = renderer.fullResolutionBackdrop;
 
         float backgroundProgress = Math.min(1.0f, progress(openedAtNanos, 160));
-        renderer.drawBackdrop(renderer.halfResolutionBackdrop, 0.0f, 0.0f, width, height, 0.0f, backgroundProgress * closingOpacity);
+        if (renderer.halfResolutionBackdrop != null) {
+            renderer.drawBackdrop(renderer.halfResolutionBackdrop, 0.0f, 0.0f, width, height, 0.0f, backgroundProgress * closingOpacity);
+        }
         renderer.drawRoundedRect(0.0f, 0.0f, width, height, 0.0f, DashboardColors.multiplyAlpha(0x8c000000, backgroundProgress * closingOpacity));
 
         float sidebarProgress = easedProgress(openedAtNanos, 220);
@@ -773,6 +785,8 @@ public final class DashboardController {
         animations.prune(600L);
         if (closing && progress(closingAtNanos, 180) >= 1.0f) {
             MinecraftRenderState.setScreen(null);
+        }
+        } catch (Throwable ignored) {
         }
     }
 

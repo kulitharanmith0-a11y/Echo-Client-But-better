@@ -9,11 +9,15 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
 public final class LaunchTrajectorySearch implements MinecraftAccess {
-    private static final double[][] LAUNCH_SPREAD = TrajectoryNumerics.launchSpread(16, 0x5eed1L);
-    private static final double[][] PROJECTILE_SPREAD = TrajectoryNumerics.launchSpread(16, 0x5eed2L);
+    private static final int SPREAD_SAMPLES = 32;
+    private static final double[][] LAUNCH_SPREAD = TrajectoryNumerics.launchSpread(SPREAD_SAMPLES, 0x5eed1L);
+    private static final double[][] PROJECTILE_SPREAD = TrajectoryNumerics.launchSpread(SPREAD_SAMPLES, 0x5eed2L);
     private static final float[] COARSE_PITCH = {-3.0F, -2.0F, -1.0F, 0.0F, 1.0F, 2.0F, 3.0F};
-    private static final float[] FINE_PITCH = {-0.5F, -0.25F, 0.0F, 0.25F, 0.5F};
-    private static final float[] FINE_YAW = {-0.5F, 0.0F, 0.5F};
+    private static final float[] COARSE_YAW = {-1.0F, 0.0F, 1.0F};
+    private static final float[] FINE_PITCH = {-0.6F, -0.3F, 0.0F, 0.3F, 0.6F};
+    private static final float[] FINE_YAW = {-0.6F, -0.3F, 0.0F, 0.3F, 0.6F};
+    private static final float[] ULTRA_FINE_PITCH = {-0.15F, -0.075F, 0.0F, 0.075F, 0.15F};
+    private static final float[] ULTRA_FINE_YAW = {-0.15F, -0.075F, 0.0F, 0.075F, 0.15F};
 
     private LaunchTrajectorySearch() {
     }
@@ -83,12 +87,12 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
     public static double hitFraction(ProjectileState state, Vec3d origin, Vec3d velocity, int elapsedTicks, float yaw, float pitch, int finalTick) {
         Vec3d direction = LaunchTrajectoryMath.direction(yaw, pitch);
         int hits = 0;
-        for (int sample = 0; sample < 16; sample++) {
+        for (int sample = 0; sample < SPREAD_SAMPLES; sample++) {
             if (sampledInterceptTick(state, sample, origin, launchVelocity(direction, velocity, sample), elapsedTicks, finalTick) > 0) {
                 hits++;
             }
         }
-        return hits / 16.0;
+        return (double) hits / (double) SPREAD_SAMPLES;
     }
 
     private static void collectAngles(double[][] path, Vec3d origin, Vec3d velocity, int launchDelay, int finalTick, List<AngleSeed> seeds) {
@@ -130,19 +134,30 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
     private static LaunchCandidate refine(ProjectileState state, AngleSeed seed, Vec3d origin, Vec3d velocity, int launchDelay, int finalTick) {
         int horizon = Math.min(finalTick, (int) seed.hitTick() + 10);
         LaunchCandidate coarse = null;
-        for (float pitchOffset : COARSE_PITCH) {
-            coarse = better(coarse, evaluate(state, seed.yaw(), seed.pitch() + pitchOffset, origin, velocity, launchDelay, horizon));
+        for (float yawOffset : COARSE_YAW) {
+            for (float pitchOffset : COARSE_PITCH) {
+                coarse = better(coarse, evaluate(state, seed.yaw() + yawOffset, seed.pitch() + pitchOffset, origin, velocity, launchDelay, horizon));
+            }
         }
         if (coarse == null) {
             return null;
         }
-        LaunchCandidate best = coarse;
+        LaunchCandidate fine = coarse;
         for (float yawOffset : FINE_YAW) {
             for (float pitchOffset : FINE_PITCH) {
                 if (yawOffset == 0.0F && pitchOffset == 0.0F) {
                     continue;
                 }
-                best = better(best, evaluate(state, coarse.yaw() + yawOffset, coarse.pitch() + pitchOffset, origin, velocity, launchDelay, horizon));
+                fine = better(fine, evaluate(state, coarse.yaw() + yawOffset, coarse.pitch() + pitchOffset, origin, velocity, launchDelay, horizon));
+            }
+        }
+        LaunchCandidate best = fine;
+        for (float yawOffset : ULTRA_FINE_YAW) {
+            for (float pitchOffset : ULTRA_FINE_PITCH) {
+                if (yawOffset == 0.0F && pitchOffset == 0.0F) {
+                    continue;
+                }
+                best = better(best, evaluate(state, fine.yaw() + yawOffset, fine.pitch() + pitchOffset, origin, velocity, launchDelay, horizon));
             }
         }
         return isPathClear(origin, velocity, best, launchDelay) ? best : null;
@@ -152,7 +167,17 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
         if (candidate == null) {
             return current;
         }
-        return current == null || candidate.robustnessScore() > current.robustnessScore() ? candidate : current;
+        if (current == null) {
+            return candidate;
+        }
+        if (candidate.robustnessScore() > current.robustnessScore() + 1.0E-9) {
+            return candidate;
+        }
+        if (Math.abs(candidate.robustnessScore() - current.robustnessScore()) <= 1.0E-9
+                && candidate.hitFraction() > current.hitFraction() + 1.0E-9) {
+            return candidate;
+        }
+        return current;
     }
 
     private static LaunchCandidate evaluate(ProjectileState state, float yaw, float pitch, Vec3d origin, Vec3d velocity, int launchDelay, int finalTick) {
@@ -162,7 +187,7 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
         int earlierHits = 0;
         int laterHits = 0;
         int hitTickSum = 0;
-        for (int sample = 0; sample < 16; sample++) {
+        for (int sample = 0; sample < SPREAD_SAMPLES; sample++) {
             Vec3d initialVelocity = launchVelocity(direction, velocity, sample);
             int hit = sampledInterceptTick(state, sample, origin, initialVelocity, launchDelay, finalTick);
             int earlier = sampledInterceptTick(state, sample, origin, initialVelocity, launchDelay - 1, finalTick);
@@ -181,8 +206,9 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
         if (hits == 0) {
             return null;
         }
-        double fraction = hits / 16.0;
-        double score = fraction + (0.5 * earlierHits + 0.7 * laterHits) / 16.0;
+        double denom = SPREAD_SAMPLES;
+        double fraction = hits / denom;
+        double score = fraction * 1.15 + (0.45 * earlierHits + 0.65 * laterHits) / denom;
         return new LaunchCandidate(yaw, pitch, fraction, score, Math.round((float) hitTickSum / (float) hits));
     }
 
@@ -212,19 +238,33 @@ public final class LaunchTrajectorySearch implements MinecraftAccess {
             velocityX *= 0.99;
             velocityY *= 0.99;
             velocityZ *= 0.99;
+            double nextX = x + velocityX;
+            double nextY = y + velocityY;
+            double nextZ = z + velocityZ;
             if (tick > launchDelay) {
                 int launchAge = tick - 1 - launchDelay;
                 double centerX = origin.x + velocity.x * launchAge;
                 double centerY = origin.y + velocity.y * launchAge;
                 double centerZ = origin.z + velocity.z * launchAge;
                 double expansion = TrajectoryTolerance.collisionExpansion(tick);
-                if (SegmentBoxIntersection.intersects(x, y, z, velocityX, velocityY, velocityZ, centerX - 0.15625 - expansion, centerY - 0.15 - expansion, centerZ - 0.15625 - expansion, centerX + 0.15625 + expansion, centerY - 0.15 + 0.3125 + expansion, centerZ + 0.15625 + expansion)) {
+                // Phase 1: Pearl ticks first and raycasts against Wind Charge at launchAge
+                if (SegmentBoxIntersection.intersects(
+                        x, y, z, velocityX, velocityY, velocityZ,
+                        centerX - 0.15625 - expansion, centerY - 0.15 - expansion, centerZ - 0.15625 - expansion,
+                        centerX + 0.15625 + expansion, centerY - 0.15 + 0.3125 + expansion, centerZ + 0.15625 + expansion)) {
+                    return tick;
+                }
+                // Phase 2: Wind Charge ticks next and raycasts against moved Ender Pearl (0.25x0.25x0.25 box)
+                if (SegmentBoxIntersection.intersects(
+                        centerX, centerY, centerZ, velocity.x, velocity.y, velocity.z,
+                        nextX - 0.125 - expansion, nextY - expansion, nextZ - 0.125 - expansion,
+                        nextX + 0.125 + expansion, nextY + 0.25 + expansion, nextZ + 0.125 + expansion)) {
                     return tick;
                 }
             }
-            x += velocityX;
-            y += velocityY;
-            z += velocityZ;
+            x = nextX;
+            y = nextY;
+            z = nextZ;
         }
         return -1;
     }

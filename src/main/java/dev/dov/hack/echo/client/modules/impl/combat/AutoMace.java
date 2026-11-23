@@ -40,12 +40,16 @@ import dev.dov.hack.echo.client.utils.targeting.TargetSelection;
 import java.util.List;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 
 public class AutoMace extends Module {
     private static final CharSequence BLATANT = CatalogText.literal("Blatant");
@@ -94,6 +98,7 @@ public class AutoMace extends Module {
     private ClientPlayerEntity trackedPlayer;
     private MaceFlightState flightState;
     private int glideEndWaitTicks;
+    private boolean wasSmashReady;
 
     public AutoMace() {
         super(new ModuleInfo(CatalogText.literal("Auto Mace"), CatalogText.literal("Automatically attacks while holding a mace"), ModuleCategory.COMBAT));
@@ -188,8 +193,9 @@ public class AutoMace extends Module {
             rotations().beginReturn(this);
             return;
         }
+        double approachSpeed = client.player.getVelocity().length();
         if (client.player.isGliding() || client.player.isOnGround()
-                || !(client.player.getVelocity().y < 0.0) || hasEquipmentSwap()) {
+                || (client.player.getVelocity().y >= 0.05 && approachSpeed < 0.85) || hasEquipmentSwap()) {
             releaseOrCancelRotation();
             return;
         }
@@ -202,22 +208,28 @@ public class AutoMace extends Module {
             return;
         }
         boolean ready = isSmashReady();
-        MaceImpactPrediction prediction = ready ? null : predictImpact(AIM_PREDICTION_TICKS);
+        int horizon = approachSpeed >= 1.0 ? AIM_PREDICTION_TICKS + 2 : AIM_PREDICTION_TICKS;
+        MaceImpactPrediction prediction = predictImpact(horizon);
         if (!ready && prediction == null) {
             releaseOrCancelRotation();
             return;
         }
-        LivingEntity target = prediction == null ? null : TargetSelection.resolveTarget(prediction.target());
-        if (target == null) {
-            target = selectAimTarget();
+        LivingEntity target = selectAimTarget();
+        if (target == null && prediction != null) {
+            target = TargetSelection.resolveTarget(prediction.target());
         }
         if (target == null) {
             releaseOrCancelRotation();
             return;
         }
         boolean accepted;
-        if (prediction != null && prediction.target() == target) {
-            accepted = rotations().aim(this, RotationPriority.HIGH, MovementSimulation.predictedAimPoint(target, prediction.impactTick()), rotationSettings());
+        Vec3d eye = client.player.getCameraPosVec(1.0F);
+        double reachMargin = MovementSimulation.attackRange() + 0.35;
+        boolean outsideImmediateReach = target.getBoundingBox().squaredMagnitude(eye) > reachMargin * reachMargin;
+        if (prediction != null && prediction.target() == target && prediction.impactTick() >= 1
+                && (outsideImmediateReach || !ready)) {
+            int leadTicks = Math.min(2, prediction.impactTick());
+            accepted = rotations().aim(this, RotationPriority.HIGH, MovementSimulation.predictedAimPoint(target, leadTicks), rotationSettings());
         } else {
             accepted = rotations().aim(this, RotationPriority.HIGH, target, aimPointSettings(), rotationSettings());
         }
@@ -233,12 +245,19 @@ public class AutoMace extends Module {
             trackedPlayer = client.player;
         }
         if (disablePending || isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+            wasSmashReady = false;
             return;
         }
         if (!client.player.isAlive()) {
             resetFlightState(true);
+            wasSmashReady = false;
             return;
         }
+        boolean smashNow = isSmashReady();
+        if (smashNow && !wasSmashReady) {
+            attackDelayMillis = 0L;
+        }
+        wasSmashReady = smashNow;
         updateDive();
     }
 
@@ -255,7 +274,7 @@ public class AutoMace extends Module {
         if (client.player.isUsingItem() && InventoryItems.isSpear(client.player.getActiveItem().getItem())) {
             return;
         }
-        if (!isSmashReady() || !attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
+        if (!isSmashReady() || !isAttackTimerReady()) {
             return;
         }
         LivingEntity target = attackTarget();
@@ -282,11 +301,18 @@ public class AutoMace extends Module {
                 || hasEquipmentSwap() || DeferredActionQueue.hasPendingActions() || !isSmashReady()) {
             return;
         }
-        if (attackTarget() == null || !canUseMace() || !attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
+        LivingEntity target = attackTarget();
+        if (target == null || !canUseMace() || !isAttackTimerReady()) {
             return;
         }
-        event.addClick();
-        resetAttackTimer();
+        boolean vanillaCrosshairMatches = client.crosshairTarget instanceof EntityHitResult hit
+                && hit.getEntity() == target;
+        if (vanillaCrosshairMatches) {
+            event.addClick();
+            resetAttackTimer();
+        } else if (client.attackCooldown <= 0 && actions().executeEntityAttack(this, target, true).succeeded()) {
+            resetAttackTimer();
+        }
     }
 
     @Subscribe
@@ -567,25 +593,70 @@ public class AutoMace extends Module {
         clearEquipmentSwapState();
     }
 
+    private double effectiveAimRange() {
+        double base = range.getValue();
+        if (client.player == null || client.player.isOnGround()) {
+            return base;
+        }
+        return base + Math.min(6.0, client.player.getVelocity().length() * 2.5);
+    }
+
     private LivingEntity selectAimTarget() {
-        double targetRange = range.getValue();
+        double targetRange = effectiveAimRange();
         double rangeSquared = targetRange * targetRange;
         Vec3d eye = client.player.getCameraPosVec(1.0F);
-        List<LivingEntity> candidates = client.world.getEntitiesByClass(LivingEntity.class, client.player.getBoundingBox().expand(targetRange), entity -> isAimCandidate(eye, rangeSquared, entity));
+        List<LivingEntity> candidates = client.world.getEntitiesByClass(LivingEntity.class, client.player.getBoundingBox().expand(targetRange + 1.0), entity -> isAimCandidate(eye, rangeSquared, entity));
         LivingEntity target = TargetSelection.resolveTarget(
                 EntityRaycasts.selectTarget(client.player, candidates, eye, targetPriority));
-        if (target == null || eye.squaredDistanceTo(target.getEntityPos()) > rangeSquared) {
+        if (target == null || target.getBoundingBox().squaredMagnitude(eye) > rangeSquared) {
             return null;
         }
         return isWithinFov(target) ? target : null;
     }
 
     private AimPointSettings aimPointSettings() {
-        return new AimPointSettings(aimVector.isSelected(CLOSEST) ? AimPointMode.CLOSEST : AimPointMode.STRAIGHT, multipoint.getValue(), random.getValue(), throughWalls.getValue());
+        boolean highSpeedDive = client.player != null && !client.player.isOnGround()
+                && (client.player.getVelocity().y <= -0.85 || client.player.getVelocity().length() >= 1.0);
+        AimPointMode mode = (highSpeedDive || aimVector.isSelected(CLOSEST)) ? AimPointMode.CLOSEST : AimPointMode.STRAIGHT;
+        boolean useRandom = !highSpeedDive && random.getValue();
+        return new AimPointSettings(mode, multipoint.getValue(), useRandom, throughWalls.getValue());
     }
 
     private RotationSettings rotationSettings() {
-        return new RotationSettings(silentRotations.getValue() ? RotationVisibility.SILENT : RotationVisibility.VISIBLE, aimTransition(), horizontalSpeed.getValue() * 20.0F, verticalSpeed.getValue() * 20.0F);
+        boolean silent = silentRotations.getValue();
+        float hSpeed = horizontalSpeed.getValue() * 20.0F;
+        float vSpeed = verticalSpeed.getValue() * 20.0F;
+        AimTransition transition = aimTransition();
+        if (transition != AimTransition.SNAP && client.player != null) {
+            double speed = client.player.getVelocity().length();
+            double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+            float velocityBoost = (float) MathHelper.clamp(1.0 + Math.max(speed - 0.5, fallSpeed - 0.45) * 1.15, 1.0, 2.8);
+            if (silent) {
+                float scale = (isSmashReady() ? 2.4F : 1.6F) * velocityBoost;
+                hSpeed *= scale;
+                vSpeed *= scale;
+            } else if (fallSpeed >= 0.7 || speed >= 0.85) {
+                float visibleBoost = MathHelper.clamp(velocityBoost, 1.0F, 2.0F);
+                hSpeed *= visibleBoost;
+                vSpeed *= visibleBoost;
+            }
+        }
+        return new RotationSettings(silent ? RotationVisibility.SILENT : RotationVisibility.VISIBLE, transition, hSpeed, vSpeed);
+    }
+
+    private boolean isAttackTimerReady() {
+        if (attackTimer.hasElapsedMillis((double) attackDelayMillis)) {
+            return true;
+        }
+        if (client.player != null && !client.player.isOnGround() && client.attackCooldown <= 0
+                && !actions().hasAttackedThisTick()) {
+            double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+            double totalSpeed = client.player.getVelocity().length();
+            if (fallSpeed >= 0.95 || totalSpeed >= 1.2) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private LivingEntity attackTarget() {
@@ -611,13 +682,48 @@ public class AutoMace extends Module {
     }
 
     private LivingEntity crosshairLivingTarget() {
-        if (client.crosshairTarget == null || client.crosshairTarget.getType() != HitResult.Type.ENTITY) {
+        if (client.crosshairTarget instanceof EntityHitResult entityHit
+                && entityHit.getEntity() instanceof LivingEntity target
+                && target.isAlive() && !target.isRemoved()) {
+            return target;
+        }
+        if (autoAim.getValue() && client.player != null && client.world != null && rotations().isOwnedBy(this)) {
+            return raycastEffectiveRotationTarget();
+        }
+        return null;
+    }
+
+    private LivingEntity raycastEffectiveRotationTarget() {
+        var effective = rotations().effectiveRotation();
+        if (effective == null) {
             return null;
         }
-        if (!(((EntityHitResult) client.crosshairTarget).getEntity() instanceof LivingEntity target)) {
-            return null;
+        double reach = client.player.getEntityInteractionRange();
+        Vec3d start = client.player.getCameraPosVec(1.0F);
+        Vec3d look = Vec3d.fromPolar(effective.pitch(), effective.yaw());
+        Vec3d end = start.add(look.multiply(reach));
+        Vec3d limitedEnd = end;
+        if (!throughWalls.getValue()) {
+            BlockHitResult blockHit = client.world.raycast(new RaycastContext(
+                    start, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
+            if (blockHit != null && blockHit.getType() == HitResult.Type.BLOCK) {
+                limitedEnd = blockHit.getPos();
+            }
         }
-        return !target.isAlive() || target.isRemoved() ? null : target;
+        double maxDistSq = start.squaredDistanceTo(limitedEnd);
+        EntityHitResult hit = ProjectileUtil.raycast(
+                client.player,
+                start,
+                limitedEnd,
+                client.player.getBoundingBox().stretch(limitedEnd.subtract(start)).expand(1.0),
+                entity -> entity instanceof LivingEntity living && !entity.isSpectator()
+                        && entity.canHit() && living.isAlive() && !living.isRemoved()
+                        && TargetSelection.isValidTarget(living),
+                maxDistSq);
+        if (hit != null && hit.getEntity() instanceof LivingEntity living) {
+            return living;
+        }
+        return null;
     }
 
     private boolean canUseMace() {

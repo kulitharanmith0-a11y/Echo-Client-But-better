@@ -1,6 +1,7 @@
 package dev.dov.hack.echo.client.gfx.opengl;
 
 import java.nio.ByteBuffer;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL30C;
 import org.lwjgl.system.MemoryStack;
@@ -30,6 +31,7 @@ public class OpenGlStateSnapshot {
     private final int vertexArray;
     private final int arrayBuffer;
     private final int uniformBuffer;
+    private final boolean hasDrawIndirect;
     private final int drawIndirectBuffer;
     public final int drawFramebuffer;
     public final float lineWidth;
@@ -59,7 +61,9 @@ public class OpenGlStateSnapshot {
         vertexArray = glGetInteger(GL_VERTEX_ARRAY_BINDING);
         arrayBuffer = glGetInteger(GL_ARRAY_BUFFER_BINDING);
         uniformBuffer = glGetInteger(GL_UNIFORM_BUFFER_BINDING);
-        drawIndirectBuffer = glGetInteger(GL_DRAW_INDIRECT_BUFFER_BINDING);
+        var caps = GL.getCapabilities();
+        hasDrawIndirect = caps != null && (caps.OpenGL40 || caps.GL_ARB_draw_indirect);
+        drawIndirectBuffer = hasDrawIndirect ? glGetInteger(GL_DRAW_INDIRECT_BUFFER_BINDING) : 0;
         drawFramebuffer = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
         lineWidth = glGetFloat(GL_LINE_WIDTH);
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -88,7 +92,9 @@ public class OpenGlStateSnapshot {
         glBindVertexArray(vertexArray);
         glBindBuffer(GL_ARRAY_BUFFER, arrayBuffer);
         glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer);
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawIndirectBuffer);
+        if (hasDrawIndirect) {
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawIndirectBuffer);
+        }
         glLineWidth(lineWidth);
         setCapability(GL_BLEND, blendEnabled);
         setCapability(GL_DEPTH_TEST, depthTestEnabled);

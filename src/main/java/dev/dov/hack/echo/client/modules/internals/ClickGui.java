@@ -53,7 +53,7 @@ public class ClickGui extends Module {
                 if (EchoClient.screenManager != null) {
                     EchoClient.screenManager.open();
                 }
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
         } finally {
             setEnabled(false);

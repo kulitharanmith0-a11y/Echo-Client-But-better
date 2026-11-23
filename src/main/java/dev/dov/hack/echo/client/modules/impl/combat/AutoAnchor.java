@@ -628,17 +628,14 @@ public class AutoAnchor extends Module {
             return;
         }
         if (!DeferredActionQueue.ensureSelected(this, slot, -1, false)) return;
-        if (USE_COOLDOWN_TICKS - useCooldownTicks < 1) return;
         if (!(client.player.getMainHandStack().getItem() instanceof BlockItem) || usedItemThisTick()) return;
         ActionResult result = interact(placement.hitResult());
         useCooldownTicks = USE_COOLDOWN_TICKS;
         if (result.isAccepted()) {
             rotations().acknowledgeRotation();
-            if (isSolidSafetyBlock(placement.position())) {
-                placedSafetyPosition = placement.position().toImmutable();
-                safetyTargetPosition = null;
-                enterChargePhase();
-            }
+            placedSafetyPosition = placement.position().toImmutable();
+            safetyTargetPosition = null;
+            enterChargePhase();
         }
     }
 
@@ -651,14 +648,10 @@ public class AutoAnchor extends Module {
         if (minimum > 0.0f && currentDamage < minimum) return false;
         if (candidates.isEmpty()) return false;
         for (BlockPos candidate : candidates) {
-            if (isSolidSafetyBlock(candidate)) {
-                return false;
-            }
-        }
-        for (BlockPos candidate : candidates) {
-            if (findSafetyPlacement(candidate) != null) {
-                float mitigated = ExplosionDamage.anchorDamage(client.player, anchorPosition, candidate);
-                return currentDamage - mitigated >= 1.0f;
+            if (findSafetyPlacement(candidate) == null) continue;
+            float mitigated = ExplosionDamage.anchorDamage(client.player, anchorPosition, candidate);
+            if (currentDamage - mitigated >= 0.5f || minimum <= 0.0f) {
+                return true;
             }
         }
         return false;
@@ -673,8 +666,8 @@ public class AutoAnchor extends Module {
         Vec3d towardAnchor = anchorCenter.subtract(playerCenter);
         LinkedHashSet<BlockPos> candidates = new LinkedHashSet<>(20);
         addSafetyRayCandidates(candidates, playerBlock, playerCenter, anchorCenter, towardAnchor);
-        int bottom = client.player.isOnGround() ? 0 : -1;
-        for (int y = 0; y >= bottom; y--) {
+        int topY = anchorPosition.getY() > playerBlock.getY() ? 1 : 0;
+        for (int y = 0; y <= topY; y++) {
             for (int x = -1; x <= 1; x++) {
                 for (int z = -1; z <= 1; z++) {
                     if (x == 0 && z == 0) continue;
@@ -688,10 +681,10 @@ public class AutoAnchor extends Module {
         record ScoredCandidate(BlockPos position, double score) {}
         List<ScoredCandidate> scored = new ArrayList<>(candidates.size());
         for (BlockPos position : candidates) {
+            if (isSolidSafetyBlock(position)) continue;
             double damage = ExplosionDamage.anchorDamage(client.player, anchorPosition, position);
-            double solidBonus = isSolidSafetyBlock(position) ? -0.5 : 0.0;
             double distPenalty = Vec3d.ofCenter(position).squaredDistanceTo(midpoint) * 0.05;
-            scored.add(new ScoredCandidate(position, damage + solidBonus + distPenalty));
+            scored.add(new ScoredCandidate(position, damage + distPenalty));
         }
         scored.sort(Comparator.comparingDouble(ScoredCandidate::score));
         List<BlockPos> ranked = new ArrayList<>(scored.size());
@@ -744,7 +737,7 @@ public class AutoAnchor extends Module {
                 || BlockPlacement.intersectsPlayer(position) || BlockPlacement.hasBlockingEntity(position)) return null;
         PlacementTarget placement = BlockPlacement.find(position, canPlaceLegit.getValue());
         if (placement == null) {
-            placement = BlockPlacement.find(position, canPlaceLegit.getValue(), true);
+            placement = BlockPlacement.find(position, canPlaceLegit.getValue(), true, true);
         }
         if (placement == null || placement.hitResult().getBlockPos().equals(anchorPosition)
                 || isRecentlyExploded(placement.hitResult().getBlockPos())) return null;

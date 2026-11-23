@@ -6,6 +6,7 @@ import dev.dov.hack.echo.client.event.window.WindowFocusEvent;
 import dev.dov.hack.echo.client.event.window.WindowPositionEvent;
 import dev.dov.hack.echo.client.event.window.WindowSizeEvent;
 import java.util.Optional;
+import net.minecraft.client.gui.cursor.Cursor;
 import net.minecraft.client.util.VideoMode;
 import net.minecraft.client.util.Window;
 import org.lwjgl.PointerBuffer;
@@ -267,6 +268,13 @@ public abstract class WindowMixin implements dev.dov.hack.echo.client.platform.P
         if (clumps$borderlessMonitor != 0L) {
             clumps$borderlessMonitor = 0L;
             GLFW.glfwSetWindowAttrib(window, GLFW.GLFW_DECORATED, GLFW.GLFW_TRUE);
+        }
+    }
+
+    @Inject(method = "setCursor", at = @At("HEAD"), cancellable = true)
+    private void suppressOsCursorUpdatesOnStreamProofGui(Cursor cursor, CallbackInfo callback) {
+        if (EchoClient.shouldHideOsCursorForStreamProof()) {
+            callback.cancel();
         }
     }
 

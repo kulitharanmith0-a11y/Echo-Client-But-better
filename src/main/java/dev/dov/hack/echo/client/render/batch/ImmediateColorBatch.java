@@ -118,6 +118,10 @@ public final class ImmediateColorBatch implements RenderBatch {
         }
     }
 
+    public void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int color, float depth) {
+        triangle(new ImmediatePoint(x1, y1), new ImmediatePoint(x2, y2), new ImmediatePoint(x3, y3), color, color, color, depth);
+    }
+
     private void quad(ImmediatePoint a, ImmediatePoint b, ImmediatePoint c, ImmediatePoint d, int firstColor, int secondColor, float depth) {
         triangle(a, b, c, firstColor, secondColor, firstColor, depth);
         triangle(c, b, d, firstColor, secondColor, secondColor, depth);

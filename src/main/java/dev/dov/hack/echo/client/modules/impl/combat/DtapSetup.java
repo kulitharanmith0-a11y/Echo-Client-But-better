@@ -75,7 +75,9 @@ public class DtapSetup extends Module {
     private long sampledPlaceDelayMs;
     private long sampledBreakDelayMs;
     private long lastObsidianPlaceTime;
-    private BlockPos lastObsidianPos;
+    private BlockPos lastObsidianSupportPos;
+    private BlockPos lastObsidianPlacedPos;
+    private boolean obsidianPlacementPending;
 
     // Tick-timing state (tracks the 10-tick damage immunity cycle across crystal breaks)
     private long lastCrystalBreakTick = -100L;
@@ -121,12 +123,14 @@ public class DtapSetup extends Module {
     @Override
     public void onEnable() {
         resetState();
+        clearObsidianTracking();
         super.onEnable();
     }
 
     @Override
     public void onDisable() {
         resetState();
+        clearObsidianTracking();
         super.onDisable();
     }
 
@@ -137,6 +141,7 @@ public class DtapSetup extends Module {
             return;
         }
 
+        updateObsidianPendingState();
         updateTickTimingObservation();
 
         boolean switchReady = switchTimer.hasElapsedMillis((double) sampledSwitchDelayMs);
@@ -147,6 +152,7 @@ public class DtapSetup extends Module {
         boolean isRmbPressed = InputKey.MOUSE_RIGHT.isPressed();
         boolean isHoldingCrystal = client.player.isHolding(Items.END_CRYSTAL);
         boolean mainHandCrystal = client.player.getMainHandStack().isOf(Items.END_CRYSTAL);
+        boolean mainHandObsidian = client.player.getMainHandStack().isOf(Items.OBSIDIAN);
 
         boolean justPressed = isActivatePressed && !activateKeyWasPressed;
         activateKeyWasPressed = isActivatePressed;
@@ -155,10 +161,9 @@ public class DtapSetup extends Module {
                 && client.crosshairTarget instanceof BlockHitResult hit
                 && hit.getType() == HitResult.Type.BLOCK) {
             BlockPos targetPos = hit.getBlockPos();
-            boolean isCrystalBase = PlacementWorldQueries.isBlock(targetPos, Blocks.OBSIDIAN)
-                    || PlacementWorldQueries.isBlock(targetPos, Blocks.BEDROCK);
-            boolean isSameRecentObi = targetPos.equals(lastObsidianPos)
-                    && (System.currentTimeMillis() - lastObsidianPlaceTime < RECENT_OBSIDIAN_WINDOW_MS);
+            BlockPos placementPos = resolveObsidianPlacementPos(hit);
+            boolean isCrystalBase = BlockPlacement.isEndCrystalBase(client.world.getBlockState(targetPos));
+            boolean isSameRecentObi = isRecentOrPendingObsidian(targetPos, placementPos);
             if (!isCrystalBase && !isSameRecentObi) {
                 crystalling = false;
                 active = false;
@@ -169,7 +174,7 @@ public class DtapSetup extends Module {
         }
 
         boolean shouldRun = isActivatePressed
-                || (crystalling && isRmbPressed && (isHoldingCrystal || client.player.isHolding(Items.OBSIDIAN)));
+                || (crystalling && isRmbPressed && (isHoldingCrystal || mainHandObsidian));
         if (!shouldRun) {
             resetState();
             return;
@@ -204,14 +209,20 @@ public class DtapSetup extends Module {
         if (!crystalling) {
             if (client.crosshairTarget instanceof BlockHitResult hit && hit.getType() == HitResult.Type.BLOCK) {
                 BlockPos hitPos = hit.getBlockPos();
-                if (!PlacementWorldQueries.isBlock(hitPos, Blocks.OBSIDIAN)) {
+                BlockPos placementPos = resolveObsidianPlacementPos(hit);
+                boolean targetIsBase = BlockPlacement.isEndCrystalBase(client.world.getBlockState(hitPos));
+                boolean placementIsBase = placementPos != null
+                        && BlockPlacement.isEndCrystalBase(client.world.getBlockState(placementPos));
+
+                if (!targetIsBase && !placementIsBase && !isRecentOrPendingObsidian(hitPos, placementPos)) {
                     if (PlacementWorldQueries.isChargedRespawnAnchor(hitPos)) {
                         return;
                     }
 
                     resetKeys();
 
-                    if (!client.player.isHolding(Items.OBSIDIAN)) {
+                    boolean switchedThisTick = false;
+                    if (!client.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
                         if (!switchReady || isCoordinatorBusy()) {
                             return;
                         }
@@ -223,18 +234,29 @@ public class DtapSetup extends Module {
                             if (actions().executeSlotSelect(this, obiSlot).succeeded()) {
                                 switchTimer.reset();
                                 sampledSwitchDelayMs = sampleDelayMs(switchDelay);
+                                switchedThisTick = true;
                             }
                         }
                     }
 
-                    if (client.player.isHolding(Items.OBSIDIAN)) {
+                    if (switchedThisTick && sampledPlaceDelayMs > 0L) {
+                        return;
+                    }
+
+                    if (client.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
                         if (!placeReady || isCoordinatorBusy()) {
+                            return;
+                        }
+                        if (placementPos != null && (BlockPlacement.intersectsPlayer(placementPos)
+                                || BlockPlacement.hasBlockingEntity(placementPos))) {
                             return;
                         }
                         if (rollPercent(placeChance.getValue())) {
                             if (actions().executeBlockUse(this, Hand.MAIN_HAND, hit, true).succeeded()) {
                                 lastObsidianPlaceTime = System.currentTimeMillis();
-                                lastObsidianPos = hitPos.toImmutable();
+                                lastObsidianSupportPos = hitPos.toImmutable();
+                                lastObsidianPlacedPos = placementPos != null ? placementPos.toImmutable() : hitPos.toImmutable();
+                                obsidianPlacementPending = true;
                                 placeTimer.reset();
                                 sampledPlaceDelayMs = sampleDelayMs(placeDelay);
                                 crystalling = true;
@@ -254,6 +276,9 @@ public class DtapSetup extends Module {
 
         if (crystalling) {
             if (!client.player.isHolding(Items.END_CRYSTAL)) {
+                if (client.player.getMainHandStack().isOf(Items.OBSIDIAN)) {
+                    resetKeys();
+                }
                 if (!switchReady || isCoordinatorBusy()) {
                     return;
                 }
@@ -388,7 +413,8 @@ public class DtapSetup extends Module {
         }
         ItemStack mainHand = client.player.getMainHandStack();
         if (mainHand.isOf(Items.OBSIDIAN)) {
-            if (active || crystalling || (System.currentTimeMillis() - lastObsidianPlaceTime < RECENT_OBSIDIAN_WINDOW_MS)) {
+            if (active || crystalling || obsidianPlacementPending
+                    || (System.currentTimeMillis() - lastObsidianPlaceTime < RECENT_OBSIDIAN_WINDOW_MS)) {
                 event.cancel();
             }
         } else if (mainHand.isOf(Items.END_CRYSTAL)) {
@@ -616,6 +642,52 @@ public class DtapSetup extends Module {
         return Math.max(0L, Math.round(setting.sampleGaussian()));
     }
 
+    private void updateObsidianPendingState() {
+        if (!obsidianPlacementPending) {
+            return;
+        }
+        if (lastObsidianPlacedPos != null && client.world != null
+                && BlockPlacement.isEndCrystalBase(client.world.getBlockState(lastObsidianPlacedPos))) {
+            obsidianPlacementPending = false;
+            return;
+        }
+        if (System.currentTimeMillis() - lastObsidianPlaceTime >= RECENT_OBSIDIAN_WINDOW_MS) {
+            obsidianPlacementPending = false;
+        }
+    }
+
+    private BlockPos resolveObsidianPlacementPos(BlockHitResult hit) {
+        if (hit == null || client.world == null) {
+            return null;
+        }
+        BlockPos hitPos = hit.getBlockPos();
+        if (client.world.getBlockState(hitPos).isReplaceable()) {
+            return hitPos;
+        }
+        return hitPos.offset(hit.getSide());
+    }
+
+    private boolean isRecentOrPendingObsidian(BlockPos hitPos, BlockPos placementPos) {
+        boolean withinWindow = obsidianPlacementPending
+                || (System.currentTimeMillis() - lastObsidianPlaceTime < RECENT_OBSIDIAN_WINDOW_MS);
+        if (!withinWindow) {
+            return false;
+        }
+        if (lastObsidianPlacedPos != null
+                && (lastObsidianPlacedPos.equals(hitPos) || lastObsidianPlacedPos.equals(placementPos))) {
+            return true;
+        }
+        return lastObsidianSupportPos != null
+                && (lastObsidianSupportPos.equals(hitPos) || lastObsidianSupportPos.equals(placementPos));
+    }
+
+    private void clearObsidianTracking() {
+        lastObsidianPlaceTime = 0L;
+        lastObsidianSupportPos = null;
+        lastObsidianPlacedPos = null;
+        obsidianPlacementPending = false;
+    }
+
     private void resetState() {
         switchTimer.reset();
         placeTimer.reset();
@@ -626,7 +698,6 @@ public class DtapSetup extends Module {
         active = false;
         crystalling = false;
         activateKeyWasPressed = false;
-        lastObsidianPos = null;
         lastActionWasPlacement = true;
         actionSentThisTick = false;
         lastCrystalBreakTick = -100L;

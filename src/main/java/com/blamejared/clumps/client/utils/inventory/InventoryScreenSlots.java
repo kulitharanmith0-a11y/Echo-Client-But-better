@@ -15,7 +15,10 @@ import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 
 public final class InventoryScreenSlots implements MinecraftAccess {
-    public record ScreenLayout(ScreenHandler handler, int backgroundWidth, int backgroundHeight) {
+    public record ScreenLayout(ScreenHandler handler, int backgroundWidth, int backgroundHeight, int screenX, int screenY, boolean hasOrigin) {
+        public ScreenLayout(ScreenHandler handler, int backgroundWidth, int backgroundHeight) {
+            this(handler, backgroundWidth, backgroundHeight, 0, 0, false);
+        }
     }
 
     public record CursorTarget(int slotIndex, double windowX, double windowY, double distance) {
@@ -25,14 +28,26 @@ public final class InventoryScreenSlots implements MinecraftAccess {
     }
 
     public static ScreenLayout layoutOf(Object screen) {
+        int screenX = 0;
+        int screenY = 0;
+        boolean hasOrigin = false;
+        if (screen instanceof HandledScreenAccessor accessor) {
+            int ax = accessor.getX();
+            int ay = accessor.getY();
+            if (ax > 0 || ay > 0) {
+                screenX = ax;
+                screenY = ay;
+                hasOrigin = true;
+            }
+        }
         if (screen instanceof InventoryScreen inventory) {
-            return new ScreenLayout(inventory.getScreenHandler(), 176, 166);
+            return new ScreenLayout(inventory.getScreenHandler(), 176, 166, screenX, screenY, hasOrigin);
         }
         if (screen instanceof CreativeInventoryScreen creative) {
-            return new ScreenLayout(creative.getScreenHandler(), 195, 136);
+            return new ScreenLayout(creative.getScreenHandler(), 195, 136, screenX, screenY, hasOrigin);
         }
         if (screen instanceof HandledScreen<?> handled && screen instanceof HandledScreenAccessor accessor) {
-            return new ScreenLayout(handled.getScreenHandler(), accessor.getBackgroundWidth(), accessor.getBackgroundHeight());
+            return new ScreenLayout(handled.getScreenHandler(), accessor.getBackgroundWidth(), accessor.getBackgroundHeight(), screenX, screenY, hasOrigin);
         }
         return null;
     }
@@ -58,6 +73,9 @@ public final class InventoryScreenSlots implements MinecraftAccess {
     }
 
     public static int[] screenOrigin(ScreenLayout layout, Window window) {
+        if (layout.hasOrigin()) {
+            return new int[] {layout.screenX(), layout.screenY()};
+        }
         int left = (window.getScaledWidth() - layout.backgroundWidth()) / 2;
         int top = (window.getScaledHeight() - layout.backgroundHeight()) / 2;
         return new int[] {left, top};

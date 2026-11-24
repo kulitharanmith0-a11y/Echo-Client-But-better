@@ -45,6 +45,9 @@ jobs:
       - name: Post notification to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_COMMIT_WEBHOOK_URL: ${{ secrets.DISCORD_COMMIT_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANGELOG_CHANNEL_ID: "1537760129427185704"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MIRROR_PAT: ${{ secrets.MIRROR_PAT }}
           REPO: ${{ github.repository }}
@@ -70,11 +73,15 @@ jobs:
             "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";
 
           let webhookUrl = (process.env.DISCORD_WEBHOOK_URL || "").trim();
-          if (!webhookUrl) {
-            console.error("DISCORD_WEBHOOK_URL secret is missing or empty.");
-            process.exit(1);
+          let commitWebhookUrl = (process.env.DISCORD_COMMIT_WEBHOOK_URL || "").trim();
+          const discordBotToken = (process.env.DISCORD_BOT_TOKEN || "").trim();
+          const changelogChannelId = (process.env.DISCORD_CHANGELOG_CHANNEL_ID || "1537760129427185704").trim();
+          if (webhookUrl) {
+            webhookUrl = webhookUrl.replace(/\/github\/?$/i, "");
           }
-          webhookUrl = webhookUrl.replace(/\/github\/?$/i, "");
+          if (commitWebhookUrl) {
+            commitWebhookUrl = commitWebhookUrl.replace(/\/github\/?$/i, "");
+          }
 
           const repo = process.env.REPO || "";
           const token = process.env.GITHUB_TOKEN || "";
@@ -478,6 +485,44 @@ jobs:
               ]
             };
 
+            if (commitWebhookUrl) {
+              const res = await fetch(commitWebhookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+              if (!res.ok) {
+                const text = await res.text();
+                console.error(`Discord commit webhook failed (${res.status}): ${text}`);
+                process.exit(1);
+              }
+              console.log("Posted commit changelog to Discord commit webhook successfully.", stats);
+              return;
+            }
+
+            if (discordBotToken && changelogChannelId) {
+              const res = await fetch(`https://discord.com/api/v10/channels/${changelogChannelId}/messages`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bot ${discordBotToken}`
+                },
+                body: JSON.stringify({ embeds: payload.embeds })
+              });
+              if (!res.ok) {
+                const text = await res.text();
+                console.error(`Discord bot channel post to ${changelogChannelId} failed (${res.status}): ${text}`);
+                process.exit(1);
+              }
+              console.log(`Posted commit changelog to Discord channel ${changelogChannelId} via bot successfully.`, stats);
+              return;
+            }
+
+            if (!webhookUrl) {
+              console.error("No Discord target configured (DISCORD_COMMIT_WEBHOOK_URL, DISCORD_BOT_TOKEN, or DISCORD_WEBHOOK_URL).");
+              process.exit(1);
+            }
+            console.warn(`DISCORD_COMMIT_WEBHOOK_URL / DISCORD_BOT_TOKEN not set; falling back to DISCORD_WEBHOOK_URL instead of channel ${changelogChannelId}.`);
             const res = await fetch(webhookUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -618,6 +663,10 @@ jobs:
             form.append("payload_json", JSON.stringify(payload));
             form.append("files[0]", new Blob([iconBuffer], { type: "image/png" }), "echo-blue.png");
 
+            if (!webhookUrl) {
+              console.error("DISCORD_WEBHOOK_URL secret is missing or empty.");
+              process.exit(1);
+            }
             const res = await fetch(webhookUrl, {
               method: "POST",
               body: form

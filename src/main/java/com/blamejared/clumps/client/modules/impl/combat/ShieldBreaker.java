@@ -52,6 +52,7 @@ public class ShieldBreaker extends Module {
     public static ItemListSetting itemWhitelist;
     public static HotbarSlotsSetting hotbarWhitelist;
     private static final long STUN_FOLLOWUP_WINDOW_TICKS = 8L;
+    private static volatile ShieldBreaker activeInstance;
     private CooldownTimer attackTimer;
     private CooldownTimer switchTimer;
     private int selectedAxeSlot;
@@ -153,8 +154,15 @@ public class ShieldBreaker extends Module {
         event.addClick();
     }
 
+    public static boolean isShieldBreakPending() {
+        ShieldBreaker inst = activeInstance;
+        return inst != null && inst.isEnabled()
+                && (inst.stunFollowupTargetId != -1 || inst.shieldTarget != null || inst.unblockTickPending);
+    }
+
     @Subscribe(priority = EventPriority.LOWEST)
     private void onAttackKey(AttackKeyEvent event) {
+        activeInstance = this;
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null) return;
         if (unblockTickPending) {
             unblockTickPending = false;
@@ -165,6 +173,7 @@ public class ShieldBreaker extends Module {
         if (stunFollowupTargetId != -1) {
             if (AutoMaceSwap.hasPendingSwap() || AutoMaceSwap.isStunSequenceRunning()) {
                 clearStunFollowup();
+                Targets.shieldBreakActive = false;
                 return;
             }
             long age = client.player.age;

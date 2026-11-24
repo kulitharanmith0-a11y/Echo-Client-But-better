@@ -8,7 +8,7 @@ import com.blamejared.clumps.client.event.input.PlayerInputEvent;
 import com.blamejared.clumps.client.event.interaction.AttackAttemptEvent;
 import com.blamejared.clumps.client.event.interaction.HandInteractEvent;
 import com.blamejared.clumps.client.event.lifecycle.ClientTickEvent;
-import com.blamejared.clumps.client.event.render.HudRenderEvent;
+import com.blamejared.clumps.client.event.lifecycle.RenderTickEvent;
 import com.blamejared.clumps.client.handlers.action.ActionCoordinator;
 import com.blamejared.clumps.client.mixin.accessor.HandledScreenAccessor;
 import com.blamejared.clumps.client.modules.Module;
@@ -164,6 +164,7 @@ public final class InventoryActionScheduler {
         if (!openMode.isSelected(SILENT_OPEN)) { abortSilent(); }
         if (!isCursorSelection() && cursorBusy()) { cancelCursor(); }
         if (openMode.isSelected(SILENT_OPEN) && isActive()) { advanceSilent(); return; }
+        if (cursorMoving) { updateCursor(); }
         if (cursorClickPending) { completeCursorTransfer(); return; }
         updateAutoClose();
         updateInitialDelay();
@@ -175,7 +176,7 @@ public final class InventoryActionScheduler {
     }
 
     @Subscribe
-    private void onHudRender(HudRenderEvent event) {
+    private void onRenderTick(RenderTickEvent event) {
         if (cursorMoving) { updateCursor(); }
     }
 
@@ -327,6 +328,9 @@ public final class InventoryActionScheduler {
         if (cursorBusy() || !isInventoryScreen()) { return; }
         InventoryScreenSlots.ScreenLayout layout = InventoryScreenSlots.layoutOf(MinecraftRenderState.getScreen());
         if (layout == null || source < 0 || source >= layout.handler().slots.size()) { return; }
+        if (CLIENT.mouse.isCursorLocked()) {
+            CLIENT.mouse.unlockCursor();
+        }
         Window window = CLIENT.getWindow();
         int[] origin = InventoryScreenSlots.screenOrigin(layout, window);
         double mouseX = CLIENT.mouse.getX(), mouseY = CLIENT.mouse.getY();
@@ -335,18 +339,17 @@ public final class InventoryActionScheduler {
         double[] center = InventoryScreenSlots.centerInWindow(layout.handler().slots.get(source), origin[0], origin[1], window);
         double distance = Math.hypot(center[0] - mouseX, center[1] - mouseY);
         cursorStartX = mouseX; cursorStartY = mouseY; cursorEndX = center[0]; cursorEndY = center[1];
-        cursorDuration = InventoryScreenSlots.cursorTravelDuration(distance, maximum, MIN_CURSOR_DURATION, MAX_CURSOR_DURATION);
+        cursorDuration = Math.max(1L, InventoryScreenSlots.cursorTravelDuration(distance, maximum, MIN_CURSOR_DURATION, MAX_CURSOR_DURATION));
         cursorStartedAt = System.currentTimeMillis();
         cursorSource = source; cursorTarget = target;
         cursorMoving = true; cursorClickPending = false;
-        CLIENT.execute(() -> CLIENT.mouse.unlockCursor());
     }
     private void updateCursor() {
         if (CLIENT.player == null || CLIENT.player.isDead() || !isCursorSelection() || !isInventoryScreen()) {
             cancelCursor(); return;
         }
         long elapsed = System.currentTimeMillis() - cursorStartedAt;
-        double fraction = Math.max(0.0, Math.min(1.0, (double) elapsed / cursorDuration));
+        double fraction = cursorDuration <= 0L ? 1.0 : Math.max(0.0, Math.min(1.0, (double) elapsed / cursorDuration));
         double eased = MathRng.smoothStep(fraction, 0.0, 1.0);
         double x = cursorStartX + (cursorEndX - cursorStartX) * eased;
         double y = cursorStartY + (cursorEndY - cursorStartY) * eased;

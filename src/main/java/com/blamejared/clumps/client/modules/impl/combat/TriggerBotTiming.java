@@ -106,9 +106,6 @@ public final class TriggerBotTiming {
         if (axeShieldBreak) {
             return !nonFireHurtWindow;
         }
-        if (targetHurtTime > Math.max(0, hurtLeadTicks)) {
-            return false;
-        }
         return remainingTrackedCooldown <= Math.max(0, hurtLeadTicks);
     }
 

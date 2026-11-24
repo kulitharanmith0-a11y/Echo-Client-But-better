@@ -409,7 +409,11 @@ public class TriggerBot extends Module {
         if (client.player.isUsingItem() || EntityInteractions.isBlocking() || EntityInteractions.isUsingOffhand()) {
             return true;
         }
-        return client.interactionManager == null || client.interactionManager.isBreakingBlock();
+        if (client.interactionManager == null) {
+            return true;
+        }
+        return client.interactionManager.isBreakingBlock()
+                && !(client.crosshairTarget instanceof EntityHitResult);
     }
 
     private boolean isYieldingToOtherModules() {
@@ -446,22 +450,18 @@ public class TriggerBot extends Module {
         boolean piercingBlocks = isPiercingBlocksActive();
 
         EntityHitResult entityHit = null;
-        if (piercing) {
-            if (client.crosshairTarget instanceof EntityHitResult crosshairHit) {
-                entityHit = crosshairHit;
-            }
-        } else if (distance <= 0.0F) {
-            if (client.crosshairTarget instanceof EntityHitResult crosshairHit) {
-                entityHit = crosshairHit;
-            } else {
+        if (client.crosshairTarget instanceof EntityHitResult crosshairHit) {
+            entityHit = crosshairHit;
+        } else if (!piercing) {
+            if (distance <= 0.0F) {
                 HitResult direct = client.player.getAttackRange().getHitResult(
                         client.player, 1.0F, net.minecraft.predicate.entity.EntityPredicates.CAN_HIT);
                 if (direct instanceof EntityHitResult directEntity) {
                     entityHit = directEntity;
                 }
+            } else {
+                entityHit = EntityRaycasts.raycastEntity(client.player, maxReach);
             }
-        } else {
-            entityHit = EntityRaycasts.raycastEntity(client.player, maxReach);
         }
 
         if (entityHit != null && entityHit.getEntity() instanceof LivingEntity target) {
@@ -472,8 +472,7 @@ public class TriggerBot extends Module {
                 if (withinCustomDistance) {
                     return new TargetHit(entityHit, target, maxReach);
                 }
-            } else if (client.player.getAttackRange().isWithinRange(client.player, hitPos)
-                    && withinCustomDistance
+            } else if (withinCustomDistance
                     && (piercingBlocks || !isOccludedByBlock(eye, hitPos))) {
                 return new TargetHit(entityHit, target, maxReach);
             }

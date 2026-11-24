@@ -195,6 +195,13 @@ public class Targets extends Module {
         }
     }
 
+    @Subscribe(priority = EventPriority.HIGHEST)
+    public void onTickShieldBreakReset(ClientTickEvent event) {
+        if (shieldBreakActive && !com.blamejared.clumps.client.modules.impl.combat.ShieldBreaker.isShieldBreakPending()) {
+            shieldBreakActive = false;
+        }
+    }
+
     @Subscribe
     public void onFriendBind(ClientTickEvent event) {
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null) {

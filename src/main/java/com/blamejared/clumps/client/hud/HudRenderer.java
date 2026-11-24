@@ -234,15 +234,21 @@ public final class HudRenderer {
         HudElementLayout layout = createLayout(renderer, backdrop, 1.0f, presence);
         String title = "The client has been updated";
         String verBadge = rawVer.startsWith("v") || rawVer.startsWith("V") ? rawVer : "v" + rawVer;
-        String subtitle = "Latest version installed automatically \u2022 Ready to play";
+        String rawSummary = com.blamejared.clumps.client.updater.AutoUpdater.getActiveBannerSummary();
+        String subtitle = (rawSummary != null && !rawSummary.isEmpty())
+                ? rawSummary + "  -  Open ClickGUI for changelog"
+                : "Installed automatically  -  Open ClickGUI for changelog";
+        if (subtitle.length() > 74) {
+            subtitle = subtitle.substring(0, 71) + "...";
+        }
 
         float titleW = layout.textWidth(FontAsset.INTER_SEMI_BOLD, title, 14.0f);
         float badgeTextW = layout.textWidth(FontAsset.INTER_SEMI_BOLD, verBadge, 11.0f);
         float badgeW = badgeTextW + 14.0f;
         float subW = layout.textWidth(FontAsset.INTER, subtitle, 11.5f);
         float contentW = Math.max(titleW + 8.0f + badgeW, subW);
-        float cardW = Math.max(360.0f, 58.0f + contentW + 20.0f);
-        float cardH = 56.0f;
+        float cardW = Math.max(380.0f, 60.0f + contentW + 20.0f);
+        float cardH = 58.0f;
         float scale = getCanvasScale();
         int viewportWidth = (int) Math.ceil(MinecraftClient.getInstance().getWindow().getFramebufferWidth() / 2.0);
         float screenX = (viewportWidth - cardW * scale) * 0.5f;
@@ -252,41 +258,42 @@ public final class HudRenderer {
 
         layout.beginElement(HudElementType.INFO_BAR, screenX, screenY, cardW, cardH);
 
-        // Ambient emerald glow + dark drop shadow
-        layout.drawGlow(x, y + 6.0f, cardW, cardH, 12.0f, 12.0f, SHADOW_COLOR, 0.95f);
-        layout.drawGlow(x, y, cardW, cardH, 12.0f, 10.0f, 0x3810B981, 0.85f);
+        // Ambient emerald glow + deep drop shadow
+        layout.drawGlow(x, y + 6.0f, cardW, cardH, 12.0f, 14.0f, SHADOW_COLOR, 0.95f);
+        layout.drawGlow(x, y, cardW, cardH, 12.0f, 12.0f, 0x3A10B981, 0.85f);
 
-        // Frosted glass backdrop + emerald-tinted border + dark obsidian fill
+        // Frosted glass backdrop + crisp 1px emerald-tinted border + obsidian interior
         layout.drawBackdropRoundedRect(x, y, cardW, cardH, 12.0f, 0xE60D1014, 1.0f);
-        layout.drawRoundedRect(x, y, cardW, cardH, 12.0f, 0x4534D399, 1.0f);
-        layout.drawRoundedRect(x + 1.0f, y + 1.0f, cardW - 2.0f, cardH - 2.0f, 11.0f, 0xEB0E1116, 1.0f);
+        layout.drawRoundedRect(x, y, cardW, cardH, 12.0f, 0x5234D399, 1.0f);
+        layout.drawRoundedRect(x + 1.0f, y + 1.0f, cardW - 2.0f, cardH - 2.0f, 11.0f, 0xEE0D1015, 1.0f);
 
-        // Left glowing icon badge
+        // Left glowing icon badge (crisp 1px border + dark emerald inner fill)
         float badgeBoxX = x + 12.0f;
         float badgeBoxY = y + 11.0f;
-        layout.drawRoundedRect(badgeBoxX, badgeBoxY, 34.0f, 34.0f, 9.0f, 0x2610B981, 1.0f);
-        layout.drawRoundedRect(badgeBoxX, badgeBoxY, 34.0f, 34.0f, 9.0f, 0x4034D399, 0.6f);
+        layout.drawRoundedRect(badgeBoxX, badgeBoxY, 34.0f, 34.0f, 9.0f, 0x6034D399, 1.0f);
+        layout.drawRoundedRect(badgeBoxX + 1.0f, badgeBoxY + 1.0f, 32.0f, 32.0f, 8.0f, 0xFF102420, 1.0f);
         layout.drawIcon(HudIcon.SHIELD_TICK, badgeBoxX + 9.0f, badgeBoxY + 9.0f, 16.0f, 16.0f, 0xFF34D399, 1.0f);
 
-        // Title + Version Pill
+        // Title + Version Pill (crisp 1px bordered pill)
         float textX = x + 56.0f;
         layout.drawText(FontAsset.INTER_SEMI_BOLD, title, textX, y + 11.5f, 14.0f, WHITE, 1.0f);
 
         float pillX = textX + titleW + 8.0f;
         float pillY = y + 11.0f;
-        layout.drawRoundedRect(pillX, pillY, badgeW, 18.0f, 6.0f, 0x2E10B981, 1.0f);
+        layout.drawRoundedRect(pillX, pillY, badgeW, 18.0f, 6.0f, 0x5534D399, 1.0f);
+        layout.drawRoundedRect(pillX + 1.0f, pillY + 1.0f, badgeW - 2.0f, 16.0f, 5.0f, 0xFF112922, 1.0f);
         layout.drawText(FontAsset.INTER_SEMI_BOLD, verBadge, pillX + 7.0f, pillY + 2.5f, 11.0f, 0xFF6EE7B7, 1.0f);
 
-        // Subtitle
-        layout.drawText(FontAsset.INTER, subtitle, textX, y + 32.0f, 11.5f, 0xB8E2E8F0, 1.0f);
+        // Subtitle (pure ASCII for 100% crisp FontAsset.INTER rendering)
+        layout.drawText(FontAsset.INTER, subtitle, textX, y + 32.5f, 11.5f, 0xB8E2E8F0, 1.0f);
 
         // Animated countdown progress bar along bottom edge
         float remainingFrac = clampFraction(1.0f - (elapsed / total));
-        float barMaxW = cardW - 20.0f;
+        float barMaxW = cardW - 24.0f;
         float barW = Math.max(0.0f, barMaxW * remainingFrac);
         if (barW > 1.0f) {
-            layout.drawRoundedRect(x + 10.0f, y + cardH - 3.5f, barMaxW, 2.0f, 1.0f, 0x22FFFFFF, 1.0f);
-            layout.drawRoundedRect(x + 10.0f, y + cardH - 3.5f, barW, 2.0f, 1.0f, 0xFF10B981, 1.0f);
+            layout.drawRoundedRect(x + 12.0f, y + cardH - 4.0f, barMaxW, 2.0f, 1.0f, 0x1EFFFFFF, 1.0f);
+            layout.drawRoundedRect(x + 12.0f, y + cardH - 4.0f, barW, 2.0f, 1.0f, 0xFF34D399, 1.0f);
         }
 
         layout.endElement();

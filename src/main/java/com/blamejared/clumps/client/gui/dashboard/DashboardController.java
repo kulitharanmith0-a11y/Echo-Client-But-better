@@ -507,6 +507,10 @@ public final class DashboardController {
     private String statusConfigId;
     private String statusMessage;
     private long statusStartedAtMillis;
+    private boolean updateModalOpen;
+    private long updateModalOpenedAtNanos;
+    private float updateModalScroll;
+    private float updateModalContentHeight;
 
     private DashboardController() {
         page = DashboardPage.Module;
@@ -586,6 +590,10 @@ public final class DashboardController {
         closingAtNanos = 0L;
         editorPulseStartedNanos = 0L;
         ui.setEnabled(false);
+        if (com.blamejared.clumps.client.updater.AutoUpdater.shouldAutoOpenChangelogModal()) {
+            com.blamejared.clumps.client.updater.AutoUpdater.markChangelogModalOpened();
+            openUpdateChangelogModal();
+        }
     }
 
     
@@ -772,7 +780,7 @@ public final class DashboardController {
         renderer.popScissor();
         renderer.flush();
 
-        if (!modalOpen) {
+        if (!modalOpen && !updateModalOpen) {
             renderSettingPopups(renderer);
             renderConfigContextMenu(renderer);
             renderer.flush();
@@ -781,8 +789,13 @@ public final class DashboardController {
             renderConfigModal(renderer);
             renderer.flush();
         }
-        com.blamejared.clumps.client.hud.HudRenderer.INSTANCE.renderAutoUpdateToast(renderer, renderer.fullResolutionBackdrop);
-        renderer.flush();
+        if (updateModalOpen) {
+            renderUpdateChangelogModal(renderer);
+            renderer.flush();
+        } else {
+            com.blamejared.clumps.client.hud.HudRenderer.INSTANCE.renderAutoUpdateToast(renderer, renderer.fullResolutionBackdrop);
+            renderer.flush();
+        }
         ui.endFrame();
         animations.prune(600L);
         if (closing && progress(closingAtNanos, 180) >= 1.0f) {
@@ -926,6 +939,7 @@ public final class DashboardController {
             painter(renderer).text(FontAsset.INTER, title, 350.0f, 48.0f, 14.0f, -1);
             drawRule(renderer, 358.0f + titleWidth, 50.0f, 1.0f, 12.0f, 452984831);
             painter(renderer).text(FontAsset.INTER, description, 374.0f + titleWidth, 48.5f, 13.0f, -2130706433);
+            renderUpdateHeaderPill(renderer);
         }
         if (searchOpacity > 0.001f) {
             layerOpacity = previousOpacity * searchOpacity;
@@ -1446,6 +1460,275 @@ public final class DashboardController {
         animationScale = 1.0f;
         layerOpacity = 1.0f;
         localOffsetY = 0.0f;
+    }
+
+    private void openUpdateChangelogModal() {
+        updateModalOpen = true;
+        updateModalOpenedAtNanos = System.nanoTime();
+        updateModalScroll = 0.0f;
+        textFocus = TextInputFocus.NONE;
+        openChoice = null;
+        closeContextMenu();
+    }
+
+    private void closeUpdateChangelogModal() {
+        updateModalOpen = false;
+    }
+
+    private UiRect updateHeaderPillBounds(UiRenderer renderer) {
+        boolean staged = com.blamejared.clumps.client.updater.AutoUpdater.hasStagedUpdate();
+        boolean hasNotes = com.blamejared.clumps.client.updater.AutoUpdater.hasChangelogAvailable();
+        if (!staged && !hasNotes) {
+            return null;
+        }
+        String label = staged
+                ? "Update v" + com.blamejared.clumps.client.updater.AutoUpdater.getStagedVersion().replaceFirst("^[vV]", "") + " ready  |  Apply & Close"
+                : "What's New  v" + com.blamejared.clumps.client.updater.AutoUpdater.getChangelogVersion().replaceFirst("^[vV]", "");
+        float textW = renderer != null
+                ? painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, label, 12.0f)
+                : label.length() * 6.8f;
+        float w = textW + 34.0f;
+        return new UiRect(1878.0f - w, 41.0f, w, 30.0f);
+    }
+
+    private void renderUpdateHeaderPill(UiRenderer renderer) {
+        if (page != DashboardPage.Module) return;
+        boolean staged = com.blamejared.clumps.client.updater.AutoUpdater.hasStagedUpdate();
+        boolean hasNotes = com.blamejared.clumps.client.updater.AutoUpdater.hasChangelogAvailable();
+        if (!staged && !hasNotes) return;
+
+        String label = staged
+                ? "Update v" + com.blamejared.clumps.client.updater.AutoUpdater.getStagedVersion().replaceFirst("^[vV]", "") + " ready  |  Apply & Close"
+                : "What's New  v" + com.blamejared.clumps.client.updater.AutoUpdater.getChangelogVersion().replaceFirst("^[vV]", "");
+        float textW = painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, label, 12.0f);
+        float w = textW + 34.0f;
+        float x = 1878.0f - w;
+        float y = 41.0f;
+        boolean hovered = !modalOpen && !updateModalOpen && rawContainsPointer(x, y, w, 30.0f);
+        float hover = animations.tween(UiId.ROOT.child("header/update-pill"), "hover", hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.0f, TransitionSpec.DURATION_140_MS);
+
+        int bg = staged
+                ? DashboardColors.interpolate(0x2810B981, 0x4210B981, hover)
+                : DashboardColors.interpolate(0x16FFFFFF, 0x26FFFFFF, hover);
+        int border = staged
+                ? DashboardColors.interpolate(0x6634D399, 0xAA34D399, hover)
+                : DashboardColors.interpolate(0x2EFFFFFF, 0x5534D399, hover);
+        int dotColor = staged ? 0xFF34D399 : 0xFF38BDF8;
+        int textColor = staged ? 0xFF6EE7B7 : DashboardColors.interpolate(0xD8FFFFFF, 0xFFFFFFFF, hover);
+
+        painter(renderer).panel(x, y, w, 30.0f, 7.0f, bg, 1.0f, border);
+        painter(renderer).roundedRect(x + 11.0f, y + 11.5f, 7.0f, 7.0f, 3.5f, dotColor);
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, label, x + 24.0f, y + 8.0f, 12.0f, textColor);
+    }
+
+    private boolean handleUpdateHeaderPillInput() {
+        if (page != DashboardPage.Module || isModuleSearchActive() || textFocus == TextInputFocus.MODULE_SEARCH) {
+            return false;
+        }
+        boolean staged = com.blamejared.clumps.client.updater.AutoUpdater.hasStagedUpdate();
+        boolean hasNotes = com.blamejared.clumps.client.updater.AutoUpdater.hasChangelogAvailable();
+        if (!staged && !hasNotes) {
+            return false;
+        }
+        UiRect bounds = updateHeaderPillBounds(ClumpsClient.uiRenderer);
+        if (bounds == null) {
+            return false;
+        }
+        if (ui.interact("header/update-pill", bounds).clicked()) {
+            if (staged) {
+                com.blamejared.clumps.client.updater.AutoUpdater.triggerApplyAndClose();
+            } else {
+                openUpdateChangelogModal();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void handleUpdateModalInput() {
+        float x = 640.0f;
+        float y = 270.0f;
+        float w = 640.0f;
+        float h = 540.0f;
+        UiRect modalBounds = new UiRect(x, y, w, h);
+        UiRect listBounds = new UiRect(x + 20.0f, y + 98.0f, w - 40.0f, 360.0f);
+
+        if (listBounds.contains(mouseX, mouseY) && Math.abs(ui.input().verticalScroll()) > 0.0) {
+            float maxScroll = Math.max(0.0f, updateModalContentHeight - listBounds.height() + 12.0f);
+            updateModalScroll = Math.max(0.0f, Math.min(maxScroll, updateModalScroll - (float) ui.input().verticalScroll() * 34.0f));
+        }
+
+        if (ui.interact("update-modal/close", new UiRect(x + w - 54.0f, y + 26.0f, 30.0f, 30.0f)).clicked()
+                || ui.interact("update-modal/got-it", new UiRect(x + w - 132.0f, y + h - 56.0f, 108.0f, 36.0f)).clicked()) {
+            closeUpdateChangelogModal();
+            return;
+        }
+
+        if (!modalBounds.contains(mouseX, mouseY) && ui.input().wasPressed(InputKey.MOUSE_LEFT.code())) {
+            closeUpdateChangelogModal();
+        }
+    }
+
+    private void renderUpdateChangelogModal(UiRenderer renderer) {
+        float progress = easedProgress(updateModalOpenedAtNanos, 210);
+        float dimming = easedProgress(updateModalOpenedAtNanos, 160);
+        painter(renderer).roundedRect(0.0f, 0.0f, 1920.0f, 1080.0f, 0.0f, DashboardColors.multiplyAlpha(0xA8000000, dimming));
+
+        pivotX = 960.0f;
+        pivotY = 540.0f;
+        animationScale = 0.96f + 0.04f * progress;
+        layerOpacity = progress;
+        localOffsetY = 12.0f * (1.0f - progress);
+
+        float x = 640.0f;
+        float y = 270.0f;
+        float w = 640.0f;
+        float h = 540.0f;
+
+        // Ambient shadow & emerald top glow
+        drawShadow(renderer, x, y + 18.0f, w, h, 14.0f, 44.0f, 0xB8000000);
+        drawShadow(renderer, x + 20.0f, y, w - 40.0f, 70.0f, 14.0f, 30.0f, 0x3510B981);
+
+        // Main frosted dark panel with emerald-tinted top border
+        painter(renderer).panel(x, y, w, h, 14.0f, 0xF80D1015, 1.0f, 0xFF22302B);
+        painter(renderer).roundedRect(x + 1.0f, y + 1.0f, w - 2.0f, 3.0f, 2.0f, 0x8034D399);
+
+        // Header icon badge
+        painter(renderer).panel(x + 24.0f, y + 24.0f, 42.0f, 42.0f, 10.0f, 0xFF102821, 1.0f, 0xFF2E7D63);
+        painter(renderer).icon(DashboardIcon.LOGO, x + 33.0f, y + 33.0f, 24.0f, 24.0f, 1.0f, 0xFFFFFFFF);
+
+        // Header title + version pill + subtitle
+        String rawVer = com.blamejared.clumps.client.updater.AutoUpdater.getChangelogVersion();
+        String verLabel = rawVer.startsWith("v") || rawVer.startsWith("V") ? rawVer : "v" + rawVer;
+        String title = "The client has been updated";
+        String summary = com.blamejared.clumps.client.updater.AutoUpdater.getChangelogSummary();
+
+        float titleX = x + 80.0f;
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, title, titleX, y + 24.0f, 18.5f, 0xFFFFFFFF);
+        float titleW = painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, title, 18.5f);
+        float pillW = painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, verLabel, 11.5f) + 16.0f;
+        float pillX = titleX + titleW + 10.0f;
+        painter(renderer).panel(pillX, y + 24.5f, pillW, 21.0f, 6.0f, 0xFF112C24, 1.0f, 0xFF2E7D63);
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, verLabel, pillX + 8.0f, y + 28.0f, 11.5f, 0xFF6EE7B7);
+
+        String trimmedSummary = summary.length() > 68 ? summary.substring(0, 65) + "..." : summary;
+        painter(renderer).text(FontAsset.INTER, trimmedSummary, titleX, y + 50.0f, 13.0f, 0xA8E2E8F0);
+
+        // Top-right close X button
+        boolean closeHover = rawContainsPointer(x + w - 54.0f, y + 26.0f, 30.0f, 30.0f);
+        painter(renderer).panel(x + w - 54.0f, y + 26.0f, 30.0f, 30.0f, 8.0f, closeHover ? 0x26FFFFFF : 0x14FFFFFF, 1.0f, 0x24FFFFFF);
+        drawGlyph(renderer, 57778, x + w - 47.0f, y + 33.0f, 16.0f, closeHover ? 0xFFFFFFFF : 0xB8FFFFFF);
+
+        drawRule(renderer, x, y + 86.0f, w, 1.0f, 0xFF1D242C);
+
+        // Section label
+        List<com.blamejared.clumps.client.updater.AutoUpdater.ChangelogItem> items =
+                com.blamejared.clumps.client.updater.AutoUpdater.getChangelogItems();
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, "WHAT CHANGED IN THIS RELEASE", x + 24.0f, y + 99.0f, 10.5f, 0x8094A3B8);
+
+        // Scrollable changelog list
+        float listX = x + 24.0f;
+        float listY = y + 118.0f;
+        float listW = w - 48.0f;
+        float listH = 342.0f;
+        renderer.pushScissor(renderX(listX - 2.0f), renderY(listY), renderSize(listW + 4.0f), renderSize(listH));
+
+        float cursorY = listY - updateModalScroll;
+        float totalHeight = 0.0f;
+        for (com.blamejared.clumps.client.updater.AutoUpdater.ChangelogItem item : items) {
+            String tag = item.tag();
+            String itemTitle = item.title();
+            String detail = item.detail();
+
+            int tagBg;
+            int tagBorder;
+            int tagText;
+            if ("NEW".equals(tag)) {
+                tagBg = 0xFF0E2921; tagBorder = 0xFF287259; tagText = 0xFF34D399;
+            } else if ("FIX".equals(tag)) {
+                tagBg = 0xFF2A200E; tagBorder = 0xFF7B571A; tagText = 0xFFFBBF24;
+            } else if ("IMP".equals(tag)) {
+                tagBg = 0xFF0E2233; tagBorder = 0xFF1F6391; tagText = 0xFF38BDF8;
+            } else {
+                tagBg = 0xFF211633; tagBorder = 0xFF5D3591; tagText = 0xFFC084FC;
+            }
+
+            List<String> detailLines = detail != null && !detail.isEmpty()
+                    ? wrapModalText(renderer, detail, FontAsset.INTER, 12.5f, listW - 32.0f)
+                    : List.of();
+            float cardH = 40.0f + (detailLines.isEmpty() ? 0.0f : 6.0f + detailLines.size() * 17.5f);
+
+            if (cursorY + cardH >= listY - 8.0f && cursorY <= listY + listH + 8.0f) {
+                painter(renderer).panel(listX, cursorY, listW, cardH, 9.0f, 0xFF13171F, 1.0f, 0xFF212936);
+
+                float tagW = Math.max(40.0f, painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, tag, 10.5f) + 14.0f);
+                painter(renderer).panel(listX + 14.0f, cursorY + 11.0f, tagW, 19.0f, 5.0f, tagBg, 1.0f, tagBorder);
+                new DashboardWidgetRenderer(painter(renderer)).centeredText(FontAsset.INTER_SEMI_BOLD, tag, listX + 14.0f + tagW * 0.5f, cursorY + 14.0f, 10.5f, tagText);
+
+                String safeTitle = itemTitle.length() > 62 ? itemTitle.substring(0, 59) + "..." : itemTitle;
+                painter(renderer).text(FontAsset.INTER_SEMI_BOLD, safeTitle, listX + 24.0f + tagW, cursorY + 12.5f, 13.5f, 0xFFF8FAFC);
+
+                float lineY = cursorY + 38.0f;
+                for (String line : detailLines) {
+                    painter(renderer).text(FontAsset.INTER, line, listX + 14.0f, lineY, 12.5f, 0xB8CBD5E1);
+                    lineY += 17.5f;
+                }
+            }
+
+            cursorY += cardH + 10.0f;
+            totalHeight += cardH + 10.0f;
+        }
+        updateModalContentHeight = totalHeight;
+        renderer.popScissor();
+
+        // Scrollbar indicator if content overflows
+        if (totalHeight > listH) {
+            float maxScroll = Math.max(1.0f, totalHeight - listH + 12.0f);
+            float thumbH = Math.max(32.0f, listH * (listH / totalHeight));
+            float thumbY = listY + (listH - thumbH) * Math.min(1.0f, updateModalScroll / maxScroll);
+            painter(renderer).roundedRect(x + w - 14.0f, listY, 4.0f, listH, 2.0f, 0x16FFFFFF);
+            painter(renderer).roundedRect(x + w - 14.0f, thumbY, 4.0f, thumbH, 2.0f, 0x5534D399);
+        }
+
+        // Footer bar
+        drawRule(renderer, x, y + h - 72.0f, w, 1.0f, 0xFF1D242C);
+        painter(renderer).roundedRect(x + 24.0f, y + h - 41.0f, 8.0f, 8.0f, 4.0f, 0xFF34D399);
+        painter(renderer).text(FontAsset.INTER, "Installed automatically in the background", x + 39.0f, y + h - 43.5f, 12.5f, 0x99CBD5E1);
+
+        boolean gotItHover = rawContainsPointer(x + w - 132.0f, y + h - 56.0f, 108.0f, 36.0f);
+        painter(renderer).panel(
+                x + w - 132.0f, y + h - 56.0f, 108.0f, 36.0f, 8.0f,
+                gotItHover ? 0xFF34D399 : 0xFF10B981, 1.0f,
+                gotItHover ? 0xFF6EE7B7 : 0xFF34D399);
+        new DashboardWidgetRenderer(painter(renderer)).centeredText(FontAsset.INTER_SEMI_BOLD, "Got it", x + w - 78.0f, y + h - 45.5f, 13.5f, 0xFF061511);
+
+        animationScale = 1.0f;
+        layerOpacity = 1.0f;
+        localOffsetY = 0.0f;
+    }
+
+    private List<String> wrapModalText(UiRenderer renderer, String text, FontAsset font, float size, float maxWidth) {
+        List<String> lines = new ArrayList<>();
+        if (text == null || text.isEmpty()) return lines;
+        String[] words = text.split("\\s+");
+        StringBuilder current = new StringBuilder();
+        for (String word : words) {
+            if (word.isEmpty()) continue;
+            String candidate = current.isEmpty() ? word : current + " " + word;
+            if (!current.isEmpty() && painter(renderer).textWidth(font, candidate, size) > maxWidth) {
+                lines.add(current.toString());
+                current.setLength(0);
+                current.append(word);
+                if (lines.size() >= 3) break;
+            } else {
+                if (!current.isEmpty()) current.append(' ');
+                current.append(word);
+            }
+        }
+        if (!current.isEmpty() && lines.size() < 4) {
+            lines.add(current.toString());
+        }
+        return lines;
     }
 
     private void renderTypeOption(UiRenderer renderer, float x, float y, float width, float height, String label, DashboardIcon icon, boolean selected) {
@@ -2576,7 +2859,7 @@ public final class DashboardController {
         return "";
     }
     private boolean containsPointer(float x, float y, float width, float height) {
-        if (modalOpen || openChoice != null || contextMenuCardId != null || closing
+        if (modalOpen || updateModalOpen || openChoice != null || contextMenuCardId != null || closing
                 || !(easedProgress(pageChangedAtNanos, 220) >= 0.98f)) return false;
         return mouseX >= x && mouseY >= y && mouseX <= x + width && mouseY <= y + height;
     }
@@ -2634,8 +2917,17 @@ public final class DashboardController {
                 }
             }
         }
+        if (updateModalOpen) {
+            handleUpdateModalInput();
+            processQueuedKeyboard();
+            return;
+        }
         if (modalOpen) {
             handleModalInput();
+            processQueuedKeyboard();
+            return;
+        }
+        if (handleUpdateHeaderPillInput()) {
             processQueuedKeyboard();
             return;
         }
@@ -2791,7 +3083,7 @@ public final class DashboardController {
 
     private boolean processCharacter(int character) {
         if (character < 32 || character == 127) return false;
-        if (textFocus == TextInputFocus.NONE && page == DashboardPage.Module && !modalOpen && openChoice == null && !capturingBind) {
+        if (textFocus == TextInputFocus.NONE && page == DashboardPage.Module && !modalOpen && !updateModalOpen && openChoice == null && !capturingBind) {
             textFocus = TextInputFocus.MODULE_SEARCH;
         }
         if (textFocus == TextInputFocus.NONE) return false;
@@ -2825,6 +3117,7 @@ public final class DashboardController {
             return true;
         }
         if (key == InputKey.ESCAPE.code()) {
+            if (updateModalOpen) { closeUpdateChangelogModal(); return true; }
             if (modalOpen) { closeConfigModal(); return true; }
             if (autoConfigPickerIndex >= 0) { closeAutoConfigItemPicker(); return true; }
             if (openChoice != null) { openChoice = null; return true; }

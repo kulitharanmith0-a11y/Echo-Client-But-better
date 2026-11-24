@@ -1,0 +1,329 @@
+name: Build & Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version number (e.g. 3.2)"
+        required: true
+        default: "3.2"
+      tag:
+        description: "Git tag name (leave empty for EchoclientV<version>)"
+        required: false
+        default: ""
+      title:
+        description: "Release title (leave empty for Echo Client V<version>)"
+        required: false
+        default: ""
+      changelog:
+        description: "Release notes in Markdown (leave empty to auto-generate from commits)"
+        required: false
+        default: ""
+      force_update:
+        description: "Force clients to install even if same/older version (hotfix/rollback)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build client JAR
+        id: build
+        env:
+          CLIENT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          START_EPOCH=$(date +%s)
+          chmod +x gradlew
+          ./gradlew :build -Pclient_release="$CLIENT_VERSION" --no-daemon
+          END_EPOCH=$(date +%s)
+          ELAPSED=$((END_EPOCH - START_EPOCH))
+          echo "elapsed_seconds=$ELAPSED" >> "$GITHUB_OUTPUT"
+          echo "build_epoch=$END_EPOCH" >> "$GITHUB_OUTPUT"
+
+      - name: Audit & Publish Release + Mirror + Discord
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIRROR_PAT: ${{ secrets.MIRROR_PAT }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          HEAD_SHA: ${{ github.sha }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_TITLE: ${{ github.event.inputs.title }}
+          INPUT_CHANGELOG: ${{ github.event.inputs.changelog }}
+          INPUT_FORCE: ${{ github.event.inputs.force_update }}
+          ELAPSED_SECONDS: ${{ steps.build.outputs.elapsed_seconds }}
+          BUILD_EPOCH: ${{ steps.build.outputs.build_epoch }}
+        run: |
+          node <<'EOF'
+          const fs = require("fs");
+          const path = require("path");
+          const crypto = require("crypto");
+          const { execFileSync } = require("child_process");
+
+          const ECHO_BLUE_ICON_BASE64 =
+            "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";
+
+          const jarPath = path.resolve("build/libs/Clumps-fabric-1.21.11-29.0.0.1.jar");
+          if (!fs.existsSync(jarPath)) {
+            throw new Error(`Built JAR not found at ${jarPath}`);
+          }
+          const jarBuffer = fs.readFileSync(jarPath);
+          const sha256 = crypto.createHash("sha256").update(jarBuffer).digest("hex");
+          const jarName = path.basename(jarPath);
+
+          // 1. Sanity & Stealth Audit on the built JAR
+          const listing = execFileSync("unzip", ["-Z1", jarPath], { encoding: "utf8" });
+          const entries = listing.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          const entrySet = new Set(entries);
+          if (!entrySet.has("fabric.mod.json") || !entrySet.has("com/blamejared/clumps/client/ClumpsClient.class")) {
+            throw new Error("Built JAR failed integrity check (missing fabric.mod.json or ClumpsClient.class).");
+          }
+          const badEntries = entries.filter((e) => /echo|dev\/dov|dev\/jadyen/i.test(e));
+          if (badEntries.length > 0) {
+            throw new Error(`Stealth audit failed: bad ZIP entries found: ${badEntries.join(", ")}`);
+          }
+          console.log(`JAR verified: ${jarName} (${jarBuffer.length} bytes, sha256=${sha256})`);
+
+          const version = (process.env.INPUT_VERSION || "3.2").trim().replace(/^v/i, "");
+          const tagName = (process.env.INPUT_TAG || "").trim() || `EchoclientV${version}`;
+          const releaseTitle = (process.env.INPUT_TITLE || "").trim() || `Echo Client V${version}`;
+          const forceUpdate = String(process.env.INPUT_FORCE || "false").toLowerCase() === "true";
+          const buildTime = parseInt(process.env.BUILD_EPOCH || "0", 10) || Math.floor(Date.now() / 1000);
+          const elapsedSecs = Math.max(1, parseInt(process.env.ELAPSED_SECONDS || "120", 10));
+          const duration = elapsedSecs >= 60 ? `${Math.floor(elapsedSecs / 60)}m ${elapsedSecs % 60}s` : `${elapsedSecs}s`;
+
+          let changelog = (process.env.INPUT_CHANGELOG || "").trim();
+          if (!changelog) {
+            let commits = "";
+            try {
+              const lastTag = execFileSync("git", ["describe", "--tags", "--abbrev=0"], { encoding: "utf8" }).trim();
+              commits = execFileSync("git", ["log", `${lastTag}..HEAD`, "--pretty=format:- %s"], { encoding: "utf8" }).trim();
+            } catch (_) {
+              commits = execFileSync("git", ["log", "-n", "10", "--pretty=format:- %s"], { encoding: "utf8" }).trim();
+            }
+            const filtered = commits
+              .split(/\r?\n/)
+              .map((l) => l.replace(/\s*\[skip-discord\]/gi, "").trim())
+              .filter(Boolean);
+            changelog = `## ECHO CLIENT UPDATE v${version}\n\n${filtered.join("\n") || "- General improvements and bug fixes"}`;
+          }
+
+          function sanitizeAscii(text) {
+            return String(text || "")
+              .replace(/[`*_~]/g, "")
+              .replace(/[\u2022\u00B7]/g, "|")
+              .replace(/[\u2013\u2014]/g, "-")
+              .replace(/[\u2018\u2019]/g, "'")
+              .replace(/[\u201C\u201D]/g, '"')
+              .replace(/[^\x20-\x7E]/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+
+          function parseReleaseNotesToChanges(body) {
+            const changes = [];
+            let currentSection = "";
+            for (const rawLine of String(body || "").split(/\r?\n/)) {
+              const line = rawLine.trim();
+              if (!line) continue;
+              if (/^#{1,4}\s+/.test(line)) {
+                currentSection = sanitizeAscii(line.replace(/^#{1,4}\s+/, "")).toLowerCase();
+                continue;
+              }
+              if (/^[-*~]\s+/.test(line)) {
+                const cleaned = sanitizeAscii(line.replace(/^[-*~]\s+/, ""));
+                if (!cleaned) continue;
+                let title = cleaned;
+                let detail = "";
+                const colonIdx = cleaned.indexOf(":");
+                if (colonIdx > 1 && colonIdx < 52) {
+                  title = cleaned.slice(0, colonIdx).trim();
+                  detail = cleaned.slice(colonIdx + 1).trim();
+                }
+                let tag = "UPD";
+                const combined = (currentSection + " " + title + " " + detail).toLowerCase();
+                if (currentSection.includes("new") || /\b(added|new module|introduced)\b/.test(combined)) {
+                  tag = "NEW";
+                } else if (currentSection.includes("fix") || /\b(fix|fixed|crash|bug|prevented|resolved)\b/.test(combined)) {
+                  tag = "FIX";
+                } else if (/\b(improv|optimiz|upgrad|enhanc|refactor|port|cleaner|faster)\b/.test(combined)) {
+                  tag = "IMP";
+                }
+                changes.push({ tag, title, detail });
+                if (changes.length >= 14) break;
+              }
+            }
+            const summary = changes.length > 0
+              ? changes.slice(0, 3).map((c) => c.title).join(", ")
+              : "Latest improvements and bug fixes";
+            return { summary, changes };
+          }
+
+          const repo = process.env.REPO;
+          const token = process.env.GITHUB_TOKEN;
+          const mirrorPat = (process.env.MIRROR_PAT || "").trim();
+          const webhookUrl = (process.env.DISCORD_WEBHOOK_URL || "").trim().replace(/\/github\/?$/i, "");
+          const shortSha = (process.env.HEAD_SHA || "").slice(0, 7);
+
+          async function upsertReleaseAndAsset(targetRepo, authToken, tName, rTitle, rBody) {
+            const headers = {
+              "Authorization": `Bearer ${authToken}`,
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "EchoClient-CloudRelease"
+            };
+            let rel = null;
+            const getRes = await fetch(`https://api.github.com/repos/${targetRepo}/releases/tags/${encodeURIComponent(tName)}`, { headers });
+            if (getRes.ok) {
+              rel = await getRes.json();
+              await fetch(`https://api.github.com/repos/${targetRepo}/releases/${rel.id}`, {
+                method: "PATCH",
+                headers: { ...headers, "Content-Type": "application/json" },
+                body: JSON.stringify({ name: rTitle, body: rBody })
+              });
+            } else {
+              const createRes = await fetch(`https://api.github.com/repos/${targetRepo}/releases`, {
+                method: "POST",
+                headers: { ...headers, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  tag_name: tName,
+                  target_commitish: "main",
+                  name: rTitle,
+                  body: rBody,
+                  draft: false,
+                  prerelease: false
+                })
+              });
+              if (!createRes.ok) {
+                throw new Error(`Failed creating release on ${targetRepo}: ${createRes.status} ${await createRes.text()}`);
+              }
+              rel = await createRes.json();
+            }
+
+            if (Array.isArray(rel.assets)) {
+              for (const a of rel.assets) {
+                if (a && a.name === jarName) {
+                  await fetch(`https://api.github.com/repos/${targetRepo}/releases/assets/${a.id}`, {
+                    method: "DELETE",
+                    headers
+                  });
+                }
+              }
+            }
+
+            const uploadBase = String(rel.upload_url || "").replace(/\{\?name,label\}$/, "");
+            const upRes = await fetch(`${uploadBase}?name=${encodeURIComponent(jarName)}`, {
+              method: "POST",
+              headers: {
+                ...headers,
+                "Content-Type": "application/java-archive",
+                "Content-Length": String(jarBuffer.length)
+              },
+              body: jarBuffer
+            });
+            if (!upRes.ok) {
+              throw new Error(`Failed uploading asset to ${targetRepo}: ${upRes.status} ${await upRes.text()}`);
+            }
+            const asset = await upRes.json();
+            return { release: rel, asset };
+          }
+
+          (async () => {
+            // 2. Publish to Private Repo
+            const priv = await upsertReleaseAndAsset(repo, token, tagName, releaseTitle, changelog);
+            console.log(`Published private release: ${priv.release.html_url}`);
+
+            // 3. Mirror to Public Repo + latest.json
+            if (mirrorPat) {
+              const owner = repo.split("/")[0];
+              const mirrorRepo = `${owner}/clumps-releases`;
+              const pub = await upsertReleaseAndAsset(mirrorRepo, mirrorPat, tagName, `v${version}`, `Release v${version}`);
+              const { summary, changes } = parseReleaseNotesToChanges(changelog);
+              const latestObj = {
+                version,
+                buildTime,
+                force: forceUpdate,
+                sha256,
+                url: pub.asset.browser_download_url,
+                summary,
+                changes
+              };
+              const mHeaders = {
+                "Authorization": `Bearer ${mirrorPat}`,
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "EchoClient-CloudRelease"
+              };
+              let existingSha = undefined;
+              const fRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, { headers: mHeaders });
+              if (fRes.ok) existingSha = (await fRes.json()).sha;
+
+              const putBody = {
+                message: `Update latest.json for v${version}`,
+                content: Buffer.from(JSON.stringify(latestObj, null, 2) + "\n", "utf8").toString("base64")
+              };
+              if (existingSha) putBody.sha = existingSha;
+
+              const pRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+                method: "PUT",
+                headers: { ...mHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify(putBody)
+              });
+              if (!pRes.ok) {
+                throw new Error(`Failed updating latest.json: ${pRes.status} ${await pRes.text()}`);
+              }
+              console.log(`Synced public mirror ${mirrorRepo} latest.json (v${version}, ${changes.length} items).`);
+            }
+
+            // 4. Post Echo Releases Discord Embed
+            if (webhookUrl) {
+              const runUrl = priv.release.html_url || `${process.env.SERVER_URL}/${repo}/actions/runs/${process.env.RUN_ID}`;
+              const description = [
+                `Client beta **${version}** has been published.`,
+                `Built from \`${shortSha}\` | [run](${runUrl})`,
+                `Took **${duration}**`
+              ].join("\n");
+              const payload = {
+                username: "updates",
+                embeds: [
+                  {
+                    author: { name: "Echo Releases", icon_url: "attachment://echo-blue.png" },
+                    title: "Client beta updated",
+                    description,
+                    color: 0x3898FF,
+                    timestamp: new Date().toISOString()
+                  }
+                ],
+                attachments: [{ id: 0, filename: "echo-blue.png" }]
+              };
+              const form = new FormData();
+              form.append("payload_json", JSON.stringify(payload));
+              form.append("files[0]", new Blob([Buffer.from(ECHO_BLUE_ICON_BASE64, "base64")], { type: "image/png" }), "echo-blue.png");
+              const dRes = await fetch(webhookUrl, { method: "POST", body: form });
+              if (!dRes.ok) {
+                throw new Error(`Discord release webhook failed (${dRes.status}): ${await dRes.text()}`);
+              }
+              console.log("Posted Echo Releases notification to Discord.");
+            }
+          })();
+          EOF

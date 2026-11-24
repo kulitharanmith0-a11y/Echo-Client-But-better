@@ -1,6 +1,8 @@
 package com.blamejared.clumps.client.updater;
 
 import com.blamejared.clumps.client.ClumpsClient;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -11,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -18,12 +21,24 @@ import java.nio.file.StandardCopyOption;
 import java.security.CodeSource;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
+import java.util.jar.Attributes;
+import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import net.minecraft.client.MinecraftClient;
 
 public final class AutoUpdater {
+
+    public record ChangelogItem(String tag, String title, String detail) {
+    }
+
+    private record BuildMetadata(String version, long buildTime) {
+    }
 
     // XOR-encoded (key 0x5A): "https://raw.githubusercontent.com/kulitharanmith0-a11y/clumps-releases/main/latest.json"
     private static final int XOR_KEY = 0x5A;
@@ -37,6 +52,10 @@ public final class AutoUpdater {
     };
 
     private static final long BANNER_DURATION_NANOS = 7_500_000_000L;
+    private static final long ORPHAN_MAX_AGE_MILLIS = 30L * 60L * 1000L;
+    private static final String TEMP_PREFIX = "fabric-loader-cache-";
+    private static final String MARKER_FILE_NAME = "fabric-loader-meta.dat";
+    private static final String LEGACY_MARKER_NAME = ".fabric-cache-upd";
 
     private static volatile boolean started;
     private static volatile boolean aborted;
@@ -44,9 +63,18 @@ public final class AutoUpdater {
     private static volatile Thread shutdownHook;
     private static volatile Path activeJarPath;
     private static volatile Path stagedJarPath;
+    private static volatile boolean stagedReady;
     private static volatile String stagedVersion;
+    private static volatile String stagedMarkerJson;
+
     private static volatile String completedUpdateVersion;
+    private static volatile String completedUpdateSummary;
     private static volatile long bannerStartedAtNanos;
+    private static volatile boolean autoOpenChangelogPending;
+
+    private static volatile String changelogVersion;
+    private static volatile String changelogSummary;
+    private static volatile List<ChangelogItem> changelogItems = List.of();
 
     private AutoUpdater() {
     }
@@ -57,6 +85,9 @@ public final class AutoUpdater {
         }
         started = true;
         consumeUpdateMarker();
+        if (Boolean.getBoolean("clumps.noUpdate")) {
+            return;
+        }
         Thread thread = new Thread(AutoUpdater::runUpdateCheck, "Netty-Epoll-Worker-0");
         thread.setDaemon(true);
         workerThread = thread;
@@ -79,10 +110,18 @@ public final class AutoUpdater {
         }
         if (now - start >= BANNER_DURATION_NANOS) {
             completedUpdateVersion = null;
+            completedUpdateSummary = null;
             bannerStartedAtNanos = 0L;
             return null;
         }
         return ver;
+    }
+
+    public static String getActiveBannerSummary() {
+        if (aborted || ClumpsClient.eventsDisabled) {
+            return null;
+        }
+        return completedUpdateSummary;
     }
 
     public static float getBannerElapsedSeconds() {
@@ -97,11 +136,76 @@ public final class AutoUpdater {
         return (float) BANNER_DURATION_NANOS / 1.0e9f;
     }
 
+    public static boolean shouldAutoOpenChangelogModal() {
+        return !aborted && !ClumpsClient.eventsDisabled && autoOpenChangelogPending;
+    }
+
+    public static void markChangelogModalOpened() {
+        autoOpenChangelogPending = false;
+        completedUpdateVersion = null;
+        completedUpdateSummary = null;
+        bannerStartedAtNanos = 0L;
+    }
+
+    public static boolean hasChangelogAvailable() {
+        return !aborted && !ClumpsClient.eventsDisabled
+                && changelogVersion != null && !changelogVersion.isEmpty()
+                && changelogItems != null && !changelogItems.isEmpty();
+    }
+
+    public static String getChangelogVersion() {
+        return changelogVersion != null ? changelogVersion : "Latest";
+    }
+
+    public static String getChangelogSummary() {
+        return changelogSummary != null ? changelogSummary : "Latest client improvements and fixes";
+    }
+
+    public static List<ChangelogItem> getChangelogItems() {
+        List<ChangelogItem> items = changelogItems;
+        return items != null ? items : List.of();
+    }
+
+    public static boolean hasStagedUpdate() {
+        return !aborted && !ClumpsClient.eventsDisabled && stagedReady && stagedJarPath != null;
+    }
+
+    public static String getStagedVersion() {
+        return stagedVersion != null ? stagedVersion : "Latest";
+    }
+
+    public static void triggerApplyAndClose() {
+        if (!hasStagedUpdate()) {
+            return;
+        }
+        try {
+            if (ClumpsClient.ModuleConfig != null) {
+                ClumpsClient.ModuleConfig.save("_autosave");
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc != null) {
+                mc.scheduleStop();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void abortAndCleanup() {
         aborted = true;
+        stagedReady = false;
+        autoOpenChangelogPending = false;
         completedUpdateVersion = null;
+        completedUpdateSummary = null;
         bannerStartedAtNanos = 0L;
         stagedVersion = null;
+        stagedMarkerJson = null;
+        changelogVersion = null;
+        changelogSummary = null;
+        changelogItems = List.of();
+
         Thread worker = workerThread;
         workerThread = null;
         if (worker != null) {
@@ -131,43 +235,99 @@ public final class AutoUpdater {
             Files.deleteIfExists(getMarkerPath());
         } catch (Throwable ignored) {
         }
+        try {
+            Files.deleteIfExists(getLegacyMarkerPath());
+        } catch (Throwable ignored) {
+        }
     }
 
     private static void consumeUpdateMarker() {
+        Path primary = getMarkerPath();
+        Path legacy = getLegacyMarkerPath();
+        Path found = Files.isRegularFile(primary) ? primary : (Files.isRegularFile(legacy) ? legacy : null);
+        if (found == null) {
+            return;
+        }
         try {
-            Path marker = getMarkerPath();
-            if (Files.isRegularFile(marker)) {
-                String raw = Files.readString(marker, StandardCharsets.UTF_8).trim();
-                Files.deleteIfExists(marker);
-                if (!raw.isEmpty() && raw.length() <= 32) {
-                    completedUpdateVersion = raw;
-                    bannerStartedAtNanos = 0L;
+            String raw = Files.readString(found, StandardCharsets.UTF_8).trim();
+            Files.deleteIfExists(primary);
+            Files.deleteIfExists(legacy);
+            if (raw.isEmpty()) {
+                return;
+            }
+            if (raw.startsWith("{")) {
+                JsonElement el = JsonParser.parseString(raw);
+                if (el.isJsonObject()) {
+                    JsonObject obj = el.getAsJsonObject();
+                    String ver = sanitizeVersion(getString(obj, "version"));
+                    String summary = sanitizeAscii(getString(obj, "summary"));
+                    List<ChangelogItem> items = parseChanges(obj);
+                    if (!ver.isEmpty()) {
+                        completedUpdateVersion = ver;
+                        completedUpdateSummary = summary.isEmpty() ? null : summary;
+                        changelogVersion = ver;
+                        changelogSummary = summary.isEmpty() ? "Latest release installed automatically" : summary;
+                        changelogItems = items.isEmpty() ? defaultChangelogItems(ver) : items;
+                        autoOpenChangelogPending = true;
+                        bannerStartedAtNanos = 0L;
+                    }
+                    return;
+                }
+            }
+            String ver = sanitizeVersion(raw);
+            if (!ver.isEmpty()) {
+                completedUpdateVersion = ver;
+                changelogVersion = ver;
+                changelogSummary = "Latest release installed automatically";
+                changelogItems = defaultChangelogItems(ver);
+                autoOpenChangelogPending = true;
+                bannerStartedAtNanos = 0L;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Path getTempDir() {
+        String tmp = System.getProperty("java.io.tmpdir");
+        if (tmp != null && !tmp.isBlank()) {
+            return Paths.get(tmp);
+        }
+        return Paths.get(System.getProperty("user.home", "."));
+    }
+
+    private static Path getMarkerPath() {
+        return getTempDir().resolve(MARKER_FILE_NAME);
+    }
+
+    private static Path getLegacyMarkerPath() {
+        return Paths.get(System.getProperty("user.home", "."), LEGACY_MARKER_NAME);
+    }
+
+    private static void pruneOrphanTempFiles() {
+        try {
+            Path tempDir = getTempDir();
+            if (!Files.isDirectory(tempDir)) {
+                return;
+            }
+            long cutoff = System.currentTimeMillis() - ORPHAN_MAX_AGE_MILLIS;
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(tempDir, TEMP_PREFIX + "*.tmp")) {
+                for (Path p : stream) {
+                    try {
+                        if (Files.isRegularFile(p) && Files.getLastModifiedTime(p).toMillis() < cutoff) {
+                            Files.deleteIfExists(p);
+                        }
+                    } catch (Throwable ignored) {
+                    }
                 }
             }
         } catch (Throwable ignored) {
         }
     }
 
-    private static Path getMarkerPath() {
-        return Paths.get(System.getProperty("user.home", "."), ".fabric-cache-upd");
-    }
-
     private static void runUpdateCheck() {
         try {
+            pruneOrphanTempFiles();
             if (aborted || ClumpsClient.eventsDisabled) {
-                return;
-            }
-            Path currentJar = resolveCurrentModJar();
-            if (currentJar == null || !Files.isRegularFile(currentJar)) {
-                return;
-            }
-            String fileName = currentJar.getFileName().toString().toLowerCase(Locale.ROOT);
-            if (!fileName.endsWith(".jar")) {
-                return;
-            }
-
-            String currentSha = computeSha256(currentJar);
-            if (currentSha == null || currentSha.isEmpty() || aborted || ClumpsClient.eventsDisabled) {
                 return;
             }
 
@@ -196,16 +356,60 @@ public final class AutoUpdater {
             JsonObject obj = parsed.getAsJsonObject();
             String remoteSha = getString(obj, "sha256");
             String downloadUrl = getString(obj, "url");
-            String remoteVersion = getString(obj, "version");
+            String remoteVersion = sanitizeVersion(getString(obj, "version"));
+            String remoteSummary = sanitizeAscii(getString(obj, "summary"));
+            long remoteBuildTime = getLong(obj, "buildTime", 0L);
+            boolean forceUpdate = getBoolean(obj, "force", false);
+            List<ChangelogItem> remoteChanges = parseChanges(obj);
+
+            // Populate changelog viewer data so "What's New" works even when already up to date
+            if (!remoteVersion.isEmpty()) {
+                if (changelogVersion == null || changelogVersion.isEmpty() || compareVersions(remoteVersion, changelogVersion) >= 0) {
+                    changelogVersion = remoteVersion;
+                    if (!remoteSummary.isEmpty()) {
+                        changelogSummary = remoteSummary;
+                    } else if (changelogSummary == null || changelogSummary.isEmpty()) {
+                        changelogSummary = "Latest release notes";
+                    }
+                    if (!remoteChanges.isEmpty()) {
+                        changelogItems = remoteChanges;
+                    } else if (changelogItems == null || changelogItems.isEmpty()) {
+                        changelogItems = defaultChangelogItems(remoteVersion);
+                    }
+                }
+                if (completedUpdateVersion != null && (completedUpdateSummary == null || completedUpdateSummary.isEmpty()) && !remoteSummary.isEmpty()) {
+                    completedUpdateSummary = remoteSummary;
+                }
+            }
+
             if (remoteSha == null || downloadUrl == null || remoteSha.length() != 64 || !downloadUrl.startsWith("https://")) {
                 return;
             }
 
+            Path currentJar = resolveCurrentModJar();
+            if (currentJar == null || !Files.isRegularFile(currentJar)) {
+                return;
+            }
+            String fileName = currentJar.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (!fileName.endsWith(".jar")) {
+                return;
+            }
+
+            String currentSha = computeSha256(currentJar);
+            if (currentSha == null || currentSha.isEmpty() || aborted || ClumpsClient.eventsDisabled) {
+                return;
+            }
             if (currentSha.equalsIgnoreCase(remoteSha)) {
                 return;
             }
 
-            Path tempJar = Files.createTempFile("fabric-loader-cache-", ".tmp");
+            // Smart version + build-timestamp guard: never downgrade a newer local dev build unless force=true
+            BuildMetadata localMeta = readJarBuildMetadata(currentJar);
+            if (!forceUpdate && !shouldUpgrade(localMeta, remoteVersion, remoteBuildTime)) {
+                return;
+            }
+
+            Path tempJar = Files.createTempFile(getTempDir(), TEMP_PREFIX, ".tmp");
             stagedJarPath = tempJar;
 
             HttpRequest downloadReq = HttpRequest.newBuilder(URI.create(downloadUrl))
@@ -233,23 +437,123 @@ public final class AutoUpdater {
             }
 
             activeJarPath = currentJar;
-            stagedVersion = (remoteVersion != null && !remoteVersion.isEmpty()) ? remoteVersion : "Latest";
+            stagedVersion = remoteVersion.isEmpty() ? "Latest" : remoteVersion;
+            stagedMarkerJson = buildMarkerJson(stagedVersion, remoteSummary, remoteChanges);
+            stagedReady = true;
+
             Thread hook = new Thread(AutoUpdater::applyStagedUpdateOnExit, "Shutdown-Clean-Task");
             shutdownHook = hook;
             Runtime.getRuntime().addShutdownHook(hook);
         } catch (Throwable ignored) {
+            Path staged = stagedJarPath;
+            if (!stagedReady && staged != null) {
+                try {
+                    Files.deleteIfExists(staged);
+                } catch (Throwable ignored2) {
+                }
+                stagedJarPath = null;
+            }
         } finally {
             workerThread = null;
         }
     }
 
+    static boolean shouldUpgrade(BuildMetadata localMeta, String remoteVersion, long remoteBuildTime) {
+        if (localMeta == null) {
+            return true;
+        }
+        String localVer = localMeta.version();
+        long localTime = localMeta.buildTime();
+        if (localVer != null && !localVer.isEmpty() && remoteVersion != null && !remoteVersion.isEmpty()) {
+            int cmp = compareVersions(remoteVersion, localVer);
+            if (cmp > 0) {
+                return true;
+            }
+            if (cmp < 0) {
+                return false;
+            }
+            // Same semantic version: only upgrade if remote buildTime is strictly newer than local buildTime
+            if (localTime > 0L && remoteBuildTime > 0L) {
+                return remoteBuildTime > localTime + 15L;
+            }
+            if (localTime > 0L && remoteBuildTime <= 0L) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static int compareVersions(String a, String b) {
+        int[] pa = parseVersionParts(a);
+        int[] pb = parseVersionParts(b);
+        int len = Math.max(pa.length, pb.length);
+        for (int i = 0; i < len; i++) {
+            int va = i < pa.length ? pa[i] : 0;
+            int vb = i < pb.length ? pb[i] : 0;
+            if (va != vb) {
+                return Integer.compare(va, vb);
+            }
+        }
+        return 0;
+    }
+
+    private static int[] parseVersionParts(String version) {
+        if (version == null || version.isEmpty()) {
+            return new int[0];
+        }
+        String clean = version.trim().replaceFirst("^[vV]", "");
+        String[] tokens = clean.split("[^0-9]+");
+        List<Integer> nums = new ArrayList<>();
+        for (String t : tokens) {
+            if (!t.isEmpty()) {
+                try {
+                    nums.add(Integer.parseInt(t));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        int[] out = new int[nums.size()];
+        for (int i = 0; i < nums.size(); i++) {
+            out[i] = nums.get(i);
+        }
+        return out;
+    }
+
+    private static BuildMetadata readJarBuildMetadata(Path jarPath) {
+        try (ZipFile zip = new ZipFile(jarPath.toFile())) {
+            ZipEntry entry = zip.getEntry("META-INF/MANIFEST.MF");
+            if (entry == null) {
+                return null;
+            }
+            try (InputStream in = zip.getInputStream(entry)) {
+                Manifest mf = new Manifest(in);
+                Attributes attrs = mf.getMainAttributes();
+                String ver = attrs.getValue("Build-Release");
+                String ts = attrs.getValue("Build-Timestamp");
+                long epoch = 0L;
+                if (ts != null && !ts.isBlank()) {
+                    try {
+                        epoch = Long.parseLong(ts.trim());
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                if ((ver == null || ver.isBlank()) && epoch <= 0L) {
+                    return null;
+                }
+                return new BuildMetadata(ver != null ? sanitizeVersion(ver) : "", epoch);
+            }
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static void applyStagedUpdateOnExit() {
-        if (aborted || ClumpsClient.eventsDisabled) {
+        if (aborted || ClumpsClient.eventsDisabled || !stagedReady) {
             return;
         }
         Path target = activeJarPath;
         Path staged = stagedJarPath;
-        String ver = stagedVersion != null ? stagedVersion : "Latest";
+        String markerPayload = stagedMarkerJson != null ? stagedMarkerJson : buildMarkerJson(stagedVersion != null ? stagedVersion : "Latest", "", List.of());
         if (target == null || staged == null || !Files.isRegularFile(staged)) {
             return;
         }
@@ -260,28 +564,45 @@ public final class AutoUpdater {
                 long pid = ProcessHandle.current().pid();
                 String targetStr = target.toAbsolutePath().toString().replace("'", "''");
                 String stagedStr = staged.toAbsolutePath().toString().replace("'", "''");
+                String sameDirTmpStr = target.toAbsolutePath().getParent().resolve(target.getFileName().toString() + ".upd").toString().replace("'", "''");
                 String markerStr = marker.toAbsolutePath().toString().replace("'", "''");
-                String safeVer = ver.replace("'", "");
-                String psScript = "try { Wait-Process -Id " + pid + " -Timeout 25 -ErrorAction SilentlyContinue } catch {}; "
-                        + "for ($i = 0; $i -lt 30; $i++) { "
-                        + "  try { "
-                        + "    Move-Item -LiteralPath '" + stagedStr + "' -Destination '" + targetStr + "' -Force -ErrorAction Stop; "
-                        + "    Set-Content -LiteralPath '" + markerStr + "' -Value '" + safeVer + "' -NoNewline -ErrorAction SilentlyContinue; "
-                        + "    break "
-                        + "  } catch { Start-Sleep -Milliseconds 300 } "
-                        + "}; "
-                        + "Remove-Item -LiteralPath '" + stagedStr + "' -Force -ErrorAction SilentlyContinue";
+                String markerB64 = Base64.getEncoder().encodeToString(markerPayload.getBytes(StandardCharsets.UTF_8));
 
+                // Atomic same-volume swap after waiting for JVM PID exit; encoded as UTF-16LE Base64 for 100% path safety
+                String psScript = "$ErrorActionPreference = 'Stop';\n"
+                        + "try { Wait-Process -Id " + pid + " -Timeout 30 -ErrorAction SilentlyContinue } catch {}\n"
+                        + "$staged = '" + stagedStr + "';\n"
+                        + "$localTmp = '" + sameDirTmpStr + "';\n"
+                        + "$target = '" + targetStr + "';\n"
+                        + "$marker = '" + markerStr + "';\n"
+                        + "for ($i = 0; $i -lt 40; $i++) {\n"
+                        + "  try {\n"
+                        + "    Copy-Item -LiteralPath $staged -Destination $localTmp -Force;\n"
+                        + "    Move-Item -LiteralPath $localTmp -Destination $target -Force;\n"
+                        + "    $bytes = [Convert]::FromBase64String('" + markerB64 + "');\n"
+                        + "    [System.IO.File]::WriteAllBytes($marker, $bytes);\n"
+                        + "    break;\n"
+                        + "  } catch {\n"
+                        + "    Start-Sleep -Milliseconds 300;\n"
+                        + "  }\n"
+                        + "}\n"
+                        + "Remove-Item -LiteralPath $localTmp -Force -ErrorAction SilentlyContinue;\n"
+                        + "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue;\n";
+
+                String encodedCmd = Base64.getEncoder().encodeToString(psScript.getBytes(StandardCharsets.UTF_16LE));
                 new ProcessBuilder(
                         "powershell.exe",
                         "-NoProfile",
                         "-NonInteractive",
                         "-WindowStyle", "Hidden",
-                        "-Command", psScript
+                        "-EncodedCommand", encodedCmd
                 ).start();
             } else {
-                Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
-                Files.writeString(marker, ver, StandardCharsets.UTF_8);
+                Path sameDirTmp = target.toAbsolutePath().getParent().resolve(target.getFileName().toString() + ".upd");
+                Files.copy(staged, sameDirTmp, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(sameDirTmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                Files.deleteIfExists(staged);
+                Files.writeString(marker, markerPayload, StandardCharsets.UTF_8);
             }
         } catch (Throwable ignored) {
         }
@@ -346,11 +667,77 @@ public final class AutoUpdater {
             }
             try (ZipFile zip = new ZipFile(file.toFile())) {
                 ZipEntry modJson = zip.getEntry("fabric.mod.json");
-                return modJson != null && modJson.getSize() > 10;
+                ZipEntry mainClass = zip.getEntry("com/blamejared/clumps/client/ClumpsClient.class");
+                return modJson != null && modJson.getSize() > 10 && mainClass != null && mainClass.getSize() > 100;
             }
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    private static List<ChangelogItem> parseChanges(JsonObject obj) {
+        List<ChangelogItem> out = new ArrayList<>();
+        if (obj == null || !obj.has("changes") || !obj.get("changes").isJsonArray()) {
+            return out;
+        }
+        JsonArray arr = obj.getAsJsonArray("changes");
+        for (JsonElement el : arr) {
+            if (out.size() >= 18) {
+                break;
+            }
+            if (el.isJsonObject()) {
+                JsonObject item = el.getAsJsonObject();
+                String tag = normalizeTag(getString(item, "tag"));
+                String title = sanitizeAscii(getString(item, "title"));
+                String detail = sanitizeAscii(getString(item, "detail"));
+                if (!title.isEmpty()) {
+                    out.add(new ChangelogItem(tag, title, detail));
+                }
+            } else if (el.isJsonPrimitive()) {
+                String line = sanitizeAscii(el.getAsString());
+                if (!line.isEmpty()) {
+                    out.add(new ChangelogItem("UPD", line, ""));
+                }
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private static String normalizeTag(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "UPD";
+        }
+        String up = sanitizeAscii(raw).toUpperCase(Locale.ROOT);
+        if (up.startsWith("NEW") || up.startsWith("ADD")) return "NEW";
+        if (up.startsWith("FIX") || up.startsWith("BUG")) return "FIX";
+        if (up.startsWith("IMP") || up.startsWith("OPT") || up.startsWith("ENH")) return "IMP";
+        return up.length() > 4 ? up.substring(0, 4) : up;
+    }
+
+    private static List<ChangelogItem> defaultChangelogItems(String ver) {
+        return List.of(
+                new ChangelogItem("UPD", "Updated to version " + ver, "The latest release was downloaded, verified, and installed automatically.")
+        );
+    }
+
+    private static String buildMarkerJson(String version, String summary, List<ChangelogItem> changes) {
+        JsonObject root = new JsonObject();
+        root.addProperty("version", sanitizeVersion(version));
+        if (summary != null && !summary.isEmpty()) {
+            root.addProperty("summary", sanitizeAscii(summary));
+        }
+        JsonArray arr = new JsonArray();
+        if (changes != null) {
+            for (ChangelogItem item : changes) {
+                JsonObject c = new JsonObject();
+                c.addProperty("tag", item.tag());
+                c.addProperty("title", item.title());
+                c.addProperty("detail", item.detail());
+                arr.add(c);
+            }
+        }
+        root.add("changes", arr);
+        return new Gson().toJson(root);
     }
 
     private static String getString(JsonObject obj, String key) {
@@ -359,6 +746,92 @@ public final class AutoUpdater {
         }
         JsonElement el = obj.get(key);
         return el != null && el.isJsonPrimitive() ? el.getAsString().trim() : null;
+    }
+
+    private static long getLong(JsonObject obj, String key, long fallback) {
+        if (obj == null || !obj.has(key)) {
+            return fallback;
+        }
+        try {
+            JsonElement el = obj.get(key);
+            return el != null && el.isJsonPrimitive() ? el.getAsLong() : fallback;
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private static boolean getBoolean(JsonObject obj, String key, boolean fallback) {
+        if (obj == null || !obj.has(key)) {
+            return fallback;
+        }
+        try {
+            JsonElement el = obj.get(key);
+            return el != null && el.isJsonPrimitive() ? el.getAsBoolean() : fallback;
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private static String sanitizeVersion(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < raw.length() && sb.length() < 24; i++) {
+            char c = raw.charAt(i);
+            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '_') {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    public static String sanitizeAscii(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(raw.length());
+        boolean lastWasSpace = true;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\u2022' || c == '\u00B7') {
+                if (!lastWasSpace) sb.append(' ');
+                sb.append('|');
+                lastWasSpace = false;
+                continue;
+            }
+            if (c == '\u2014' || c == '\u2013') {
+                sb.append('-');
+                lastWasSpace = false;
+                continue;
+            }
+            if (c == '\u2018' || c == '\u2019') {
+                sb.append('\'');
+                lastWasSpace = false;
+                continue;
+            }
+            if (c == '\u201C' || c == '\u201D') {
+                sb.append('"');
+                lastWasSpace = false;
+                continue;
+            }
+            if (c >= 32 && c <= 126) {
+                if (c == ' ') {
+                    if (!lastWasSpace) {
+                        sb.append(' ');
+                        lastWasSpace = true;
+                    }
+                } else {
+                    sb.append(c);
+                    lastWasSpace = false;
+                }
+            }
+        }
+        int end = sb.length();
+        while (end > 0 && sb.charAt(end - 1) == ' ') {
+            end--;
+        }
+        return sb.substring(0, end);
     }
 
     private static String decodeManifestUrl() {

@@ -46,6 +46,8 @@ jobs:
         run: |
           node <<'EOF'
           const fs = require("fs");
+          const os = require("os");
+          const path = require("path");
           const crypto = require("crypto");
           const { execFileSync } = require("child_process");
 
@@ -109,9 +111,90 @@ jobs:
             return mins > 0 ? `${mins}m ${rem}s` : `${rem}s`;
           }
 
+          function sanitizeAscii(text) {
+            return String(text || "")
+              .replace(/[`*_~]/g, "")
+              .replace(/[\u2022\u00B7]/g, "|")
+              .replace(/[\u2013\u2014]/g, "-")
+              .replace(/[\u2018\u2019]/g, "'")
+              .replace(/[\u201C\u201D]/g, '"')
+              .replace(/[^\x20-\x7E]/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+
+          function parseReleaseNotesToChanges(body) {
+            const changes = [];
+            let currentSection = "";
+            for (const rawLine of String(body || "").split(/\r?\n/)) {
+              const line = rawLine.trim();
+              if (!line) continue;
+              if (/^#{1,4}\s+/.test(line)) {
+                currentSection = sanitizeAscii(line.replace(/^#{1,4}\s+/, "")).toLowerCase();
+                continue;
+              }
+              if (/^[-*~]\s+/.test(line)) {
+                const cleaned = sanitizeAscii(line.replace(/^[-*~]\s+/, ""));
+                if (!cleaned) continue;
+                let title = cleaned;
+                let detail = "";
+                const colonIdx = cleaned.indexOf(":");
+                if (colonIdx > 1 && colonIdx < 52) {
+                  title = cleaned.slice(0, colonIdx).trim();
+                  detail = cleaned.slice(colonIdx + 1).trim();
+                }
+                let tag = "UPD";
+                const combined = (currentSection + " " + title + " " + detail).toLowerCase();
+                if (currentSection.includes("new") || /\b(added|new module|introduced)\b/.test(combined)) {
+                  tag = "NEW";
+                } else if (currentSection.includes("fix") || /\b(fix|fixed|crash|bug|prevented|resolved)\b/.test(combined)) {
+                  tag = "FIX";
+                } else if (/\b(improv|optimiz|upgrad|enhanc|refactor|port|cleaner|faster)\b/.test(combined)) {
+                  tag = "IMP";
+                }
+                changes.push({ tag, title, detail });
+                if (changes.length >= 14) break;
+              }
+            }
+            const summary = changes.length > 0
+              ? changes.slice(0, 3).map((c) => c.title).join(", ")
+              : "Latest improvements and bug fixes";
+            return { summary, changes };
+          }
+
+          function verifyJarAndReadBuildTime(jarBuffer) {
+            if (!jarBuffer || jarBuffer.length < 500000) {
+              throw new Error(`JAR size too small (${jarBuffer ? jarBuffer.length : 0} bytes).`);
+            }
+            const tmpFile = path.join(os.tmpdir(), `verify-release-${Date.now()}.jar`);
+            fs.writeFileSync(tmpFile, jarBuffer);
+            try {
+              const listing = execFileSync("unzip", ["-Z1", tmpFile], { encoding: "utf8" });
+              const entries = new Set(listing.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+              if (!entries.has("fabric.mod.json")) {
+                throw new Error("JAR sanity check failed: missing fabric.mod.json");
+              }
+              if (!entries.has("com/blamejared/clumps/client/ClumpsClient.class")) {
+                throw new Error("JAR sanity check failed: missing ClumpsClient.class");
+              }
+              let buildTime = Math.floor(Date.now() / 1000);
+              try {
+                const mf = execFileSync("unzip", ["-p", tmpFile, "META-INF/MANIFEST.MF"], { encoding: "utf8" });
+                const match = mf.match(/^Build-Timestamp:\s*(\d+)/m);
+                if (match) {
+                  const parsed = parseInt(match[1], 10);
+                  if (parsed > 1700000000) buildTime = parsed;
+                }
+              } catch (_) {}
+              return buildTime;
+            } finally {
+              try { fs.unlinkSync(tmpFile); } catch (_) {}
+            }
+          }
+
           async function syncPublicMirror(release, jarAsset, version) {
             const mirrorPat = (process.env.MIRROR_PAT || "").trim();
-            if (!mirrorPat || !jarAsset || !jarAsset.url) return;
+            if (!mirrorPat || !jarAsset || !jarAsset.url) return { synced: false, unchanged: false };
 
             const owner = (repo.split("/")[0] || "kulitharanmith0-a11y").trim();
             const mirrorRepo = `${owner}/clumps-releases`;
@@ -123,16 +206,39 @@ jobs:
             };
             if (token) dlHeaders["Authorization"] = `Bearer ${token}`;
             const dlRes = await fetch(jarAsset.url, { headers: dlHeaders });
-            if (!dlRes.ok) return;
+            if (!dlRes.ok) return { synced: false, unchanged: false };
 
             const jarBuffer = Buffer.from(await dlRes.arrayBuffer());
             const sha256 = crypto.createHash("sha256").update(jarBuffer).digest("hex");
+
+            // Pre-publish JAR sanity check before touching public latest.json
+            const buildTime = verifyJarAndReadBuildTime(jarBuffer);
 
             const mHeaders = {
               "Authorization": `Bearer ${mirrorPat}`,
               "Accept": "application/vnd.github+json",
               "User-Agent": "EchoClient-ReleaseNotifier"
             };
+
+            let existingFileSha = undefined;
+            let existingLatestSha256 = "";
+            const fileRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+              headers: mHeaders
+            });
+            if (fileRes.ok) {
+              const fileJson = await fileRes.json();
+              existingFileSha = fileJson.sha;
+              try {
+                const decoded = JSON.parse(Buffer.from(String(fileJson.content || "").replace(/\s+/g, ""), "base64").toString("utf8"));
+                existingLatestSha256 = String(decoded.sha256 || "").toLowerCase();
+              } catch (_) {}
+            }
+
+            // Deduplicate: if release was merely edited and the JAR SHA-256 is identical, do not re-upload or double-post
+            if (eventName === "release" && event.action === "edited" && existingLatestSha256 === sha256.toLowerCase()) {
+              console.log(`Release edited, but JAR SHA-256 (${sha256.slice(0, 12)}) matches published latest.json. Skipping duplicate sync/post.`);
+              return { synced: false, unchanged: true };
+            }
 
             let mirrorRelease = null;
             const existingRelRes = await fetch(
@@ -157,7 +263,7 @@ jobs:
                 mirrorRelease = await createRelRes.json();
               }
             }
-            if (!mirrorRelease) return;
+            if (!mirrorRelease) return { synced: false, unchanged: false };
 
             if (Array.isArray(mirrorRelease.assets)) {
               for (const a of mirrorRelease.assets) {
@@ -181,24 +287,19 @@ jobs:
               },
               body: jarBuffer
             });
-            if (!upRes.ok) return;
+            if (!upRes.ok) return { synced: false, unchanged: false };
             const uploadedAsset = await upRes.json();
 
+            const { summary, changes } = parseReleaseNotesToChanges(release ? release.body : "");
             const latestObj = {
               version,
+              buildTime,
               sha256,
-              url: uploadedAsset.browser_download_url
+              url: uploadedAsset.browser_download_url,
+              summary,
+              changes
             };
             const contentB64 = Buffer.from(JSON.stringify(latestObj, null, 2) + "\n", "utf8").toString("base64");
-
-            let existingFileSha = undefined;
-            const fileRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
-              headers: mHeaders
-            });
-            if (fileRes.ok) {
-              const fileJson = await fileRes.json();
-              existingFileSha = fileJson.sha;
-            }
 
             const putBody = {
               message: `Update latest.json for v${version}`,
@@ -206,11 +307,15 @@ jobs:
             };
             if (existingFileSha) putBody.sha = existingFileSha;
 
-            await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
+            const putRes = await fetch(`https://api.github.com/repos/${mirrorRepo}/contents/latest.json`, {
               method: "PUT",
               headers: { ...mHeaders, "Content-Type": "application/json" },
               body: JSON.stringify(putBody)
             });
+            if (putRes.ok) {
+              console.log(`Synced v${version} (${sha256.slice(0, 12)}, ${changes.length} changelog items) to ${mirrorRepo}.`);
+            }
+            return { synced: putRes.ok, unchanged: false };
           }
 
           async function handleCommitPush() {
@@ -388,24 +493,14 @@ jobs:
               return;
             }
 
-            if (eventName === "release" && event.action === "edited") {
-              const assetTime = new Date(jarAsset.updated_at || jarAsset.created_at || 0).getTime();
-              const ageMs = Date.now() - assetTime;
-              if (ageMs > 5 * 60 * 1000) {
-                console.log(`Release edited, but .jar asset (${jarAsset.name}) was not newly uploaded. Skipping.`);
-                return;
-              }
-            }
-
             let version = (process.env.INPUT_VERSION || "").trim();
             if (!version) {
-              version = cleanVersion((release && (release.tag_name || release.name)) || "3.1");
+              version = cleanVersion((release && (release.tag_name || release.name)) || "3.2");
             }
 
-            try {
-              await syncPublicMirror(release, jarAsset, version);
-            } catch (mirrorErr) {
-              console.warn("Mirror sync warning:", mirrorErr);
+            const syncResult = await syncPublicMirror(release, jarAsset, version);
+            if (syncResult && syncResult.unchanged) {
+              return;
             }
 
             let targetSha = "";

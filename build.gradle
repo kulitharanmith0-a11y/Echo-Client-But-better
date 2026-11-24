@@ -19,7 +19,17 @@ base { archivesName = 'Clumps-fabric-1.21.11-29.0.0.1' }
 // is stripped after that runs: the release artifact is
 // build/libs/Clumps-fabric-1.21.11-29.0.0.1.jar with no -<version> tail.
 afterEvaluate {
-    tasks.withType(Jar).configureEach { archiveVersion = '' }
+    def buildEpoch = String.valueOf(System.currentTimeMillis().intdiv(1000L))
+    def releaseVer = providers.gradleProperty('client_release').orElse('3.2').get()
+    tasks.withType(Jar).configureEach {
+        archiveVersion = ''
+        manifest {
+            attributes(
+                    'Build-Timestamp': buildEpoch,
+                    'Build-Release': releaseVer
+            )
+        }
+    }
     tasks.matching { it.name == 'remapJar' }.configureEach {
         archiveFileName = 'Clumps-fabric-1.21.11-29.0.0.1.jar'
     }

@@ -88,15 +88,16 @@ public final class WeaponAttributes implements MinecraftAccess {
     }
 
     
-    public static void performPiercingAttack() {
+    public static boolean performPiercingAttack() {
         if (CLIENT.player == null || CLIENT.interactionManager == null) {
-            return;
+            return false;
         }
         PiercingWeaponComponent weapon = CLIENT.player.getMainHandStack().get(DataComponentTypes.PIERCING_WEAPON);
         if (weapon == null) {
-            return;
+            return false;
         }
         ((ClientPlayerInteractionManagerAccessor) CLIENT.interactionManager).invokeAttackWithPiercingWeapon(weapon);
         CLIENT.player.swingHand(Hand.MAIN_HAND);
+        return true;
     }
 }

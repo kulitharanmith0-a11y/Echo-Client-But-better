@@ -5,6 +5,13 @@ package com.blamejared.clumps.client.modules.impl.combat;
  * Kept free of client runtime dependencies so timing edge cases are directly unit-testable.
  */
 public final class TriggerBotTiming {
+    public enum HitMode {
+        ALWAYS,
+        ONLY_CRIT,
+        PRIORITIZE_CRIT,
+        CRITS_AND_SPRINT
+    }
+
     public enum CritPolicy {
         NONE,
         NORMAL,
@@ -79,6 +86,37 @@ public final class TriggerBotTiming {
             return inCriticalFallState || allowsNonCriticalFallback;
         }
         return true;
+    }
+
+    public static boolean allowsHitTiming(
+            HitMode hitMode,
+            CritPolicy critPolicy,
+            boolean inCritRange,
+            boolean critOnlyOnSpace,
+            boolean jumpPressed,
+            boolean onGround,
+            boolean inCriticalFallState,
+            boolean sprinting,
+            boolean allowsNonCriticalFallback,
+            boolean cannotCritOrSprint) {
+        if (hitMode == null || hitMode == HitMode.ALWAYS) {
+            return true;
+        }
+        if (hitMode == HitMode.ONLY_CRIT) {
+            return inCriticalFallState && !sprinting;
+        }
+        if (hitMode == HitMode.CRITS_AND_SPRINT) {
+            return sprinting || (inCriticalFallState && !sprinting) || cannotCritOrSprint;
+        }
+        return allowsCriticalTiming(
+                critPolicy,
+                inCritRange,
+                critOnlyOnSpace,
+                jumpPressed,
+                onGround,
+                inCriticalFallState,
+                sprinting,
+                allowsNonCriticalFallback);
     }
 
     public static int effectiveHurtLeadTicks(int pingMillis, boolean pingCompensationEnabled) {

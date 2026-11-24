@@ -3,6 +3,7 @@ package com.blamejared.clumps.client.mixin;
 import com.blamejared.clumps.client.ClumpsClient;
 import com.blamejared.clumps.client.event.world.EntityHitboxEvent;
 import com.blamejared.clumps.client.modules.impl.utility.AntiTrap;
+import com.blamejared.clumps.client.modules.impl.world.GhostHand;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.util.math.Box;
@@ -18,7 +19,7 @@ public class ProjectileUtilMixin {
         if (ClumpsClient.eventsDisabled) {
             return targetingBox;
         }
-        if (AntiTrap.shouldIgnoreEntity(entity)) {
+        if (AntiTrap.shouldIgnoreEntity(entity) || GhostHand.shouldIgnoreEntity(entity)) {
             double excludedY = entity.getY() - 1024.0;
             return new Box(entity.getX(), excludedY, entity.getZ(), entity.getX(), excludedY, entity.getZ());
         }

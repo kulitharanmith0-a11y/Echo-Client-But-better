@@ -7,6 +7,7 @@ import com.blamejared.clumps.client.event.interaction.AttackAttemptEvent;
 import com.blamejared.clumps.client.event.interaction.HandSwingEvent;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
+import com.blamejared.clumps.client.keyboard.InputState;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.ChoiceSetting;
@@ -107,7 +108,9 @@ public class SpearLunge extends Module {
                 activationKeyWasPressed = true;
                 return;
             }
-            if (tryActivate()) WeaponAttributes.performPiercingAttack();
+            if (tryActivate() && WeaponAttributes.performPiercingAttack()) {
+                InputState.simulateAttackClick(this);
+            }
         }
         activationKeyWasPressed = pressed;
     }

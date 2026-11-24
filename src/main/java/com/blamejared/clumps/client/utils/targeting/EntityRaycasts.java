@@ -196,7 +196,14 @@ public final class EntityRaycasts implements MinecraftAccess {
         if (CLIENT.player == null) {
             return false;
         }
-        return CLIENT.player.isOnGround() || CLIENT.player.isGliding() || CLIENT.player.isTouchingWater()
+        return CLIENT.player.isOnGround() || cannotCritOrSprint();
+    }
+
+    public static boolean cannotCritOrSprint() {
+        if (CLIENT.player == null) {
+            return false;
+        }
+        return CLIENT.player.isGliding() || CLIENT.player.isTouchingWater()
                 || CLIENT.player.isClimbing() || intersectsCobweb() || intersectsSweetBerryBush();
     }
 

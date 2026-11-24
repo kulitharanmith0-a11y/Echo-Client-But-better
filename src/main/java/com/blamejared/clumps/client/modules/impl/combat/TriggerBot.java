@@ -6,6 +6,8 @@ import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.AttackKeyEvent;
 import com.blamejared.clumps.client.event.input.MouseMovementEvent;
+import com.blamejared.clumps.client.event.interaction.AttackAttemptEvent;
+import com.blamejared.clumps.client.event.interaction.BlockBreakingEvent;
 import com.blamejared.clumps.client.event.interaction.EntityAttackEvent;
 import com.blamejared.clumps.client.event.lifecycle.WorldTickContextEvent;
 import com.blamejared.clumps.client.event.network.PacketReceiveEvent;
@@ -25,6 +27,7 @@ import com.blamejared.clumps.client.keyboard.KeybindingCache;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.modules.ModuleCategory;
 import com.blamejared.clumps.client.modules.ModuleInfo;
+import com.blamejared.clumps.client.modules.impl.world.GhostHand;
 import com.blamejared.clumps.client.modules.internals.Targets;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.settings.BooleanSetting;
@@ -63,6 +66,10 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
 public class TriggerBot extends Module {
+    private static final CharSequence HIT_ALWAYS = CatalogText.literal("Always");
+    private static final CharSequence HIT_ONLY_CRIT = CatalogText.literal("Only Crit");
+    private static final CharSequence HIT_PRIORITIZE_CRIT = CatalogText.literal("Prioritize Crit");
+    private static final CharSequence HIT_CRITS_SPRINT = CatalogText.literal("Crits + Sprint");
     private static final CharSequence CRIT_NONE = CatalogText.literal("None");
     private static final CharSequence CRIT_PRECISE = CatalogText.literal("pCrit");
     private static final CharSequence CRIT_NORMAL = CatalogText.literal("Normal");
@@ -75,6 +82,13 @@ public class TriggerBot extends Module {
 
     private static final long SHIELD_BREAK_FOLLOWUP_TICKS = 12L;
 
+    private static final ChoiceSetting hitMode = new ChoiceSetting(
+            CatalogText.literal("Hit Mode"),
+            HIT_PRIORITIZE_CRIT,
+            HIT_ALWAYS,
+            HIT_ONLY_CRIT,
+            HIT_PRIORITIZE_CRIT,
+            HIT_CRITS_SPRINT);
     private static ChoiceSetting critMode;
     private static BooleanSetting critOnlyOnSpace;
     private static BooleanSetting attackShields;
@@ -93,6 +107,8 @@ public class TriggerBot extends Module {
             CatalogText.literal("Ping HurtTime"), true);
     private static final BooleanSetting holdToAttack = new BooleanSetting(
             CatalogText.literal("Hold Attack"), false);
+    private static final BooleanSetting dontBreakBlocks = new BooleanSetting(
+            CatalogText.literal("Don't Break Blocks"), false);
     private static final ChoiceSetting aimAlign = new ChoiceSetting(
             CatalogText.literal("Aim Align"), ALIGN_OFF, ALIGN_OFF, ALIGN_VISIBLE);
     private static final FloatSetting alignSpeed = new FloatSetting(
@@ -136,16 +152,22 @@ public class TriggerBot extends Module {
         attackDelay.description(CatalogText.literal("Delay between attacks"));
         reactionDelay.description(CatalogText.literal("Time on target before attacking"));
         attackDistance.description(CatalogText.literal("Only attack when crosshair hit is within this distance (0 = vanilla reach)"));
+        hitMode.description(CatalogText.literal("Controls when attacks fire: Always, Only Crit, Prioritize Crit, or Crits + Sprint"));
         pingHurtTime.description(CatalogText.literal("Leads target hurt-time by half your ping (capped at 2 ticks) for snappier trades"));
         holdToAttack.description(CatalogText.literal("Only triggers while holding the Attack key"));
+        dontBreakBlocks.description(CatalogText.literal("Prevents breaking blocks while holding the Attack key for Trigger Bot"));
         aimAlign.description(CatalogText.literal("Smoothly aligns visible aim onto targets within Align FOV"));
         alignSpeed.description(CatalogText.literal("Maximum smooth angular alignment speed"));
         alignFov.description(CatalogText.literal("Maximum angle from crosshair to assist alignment"));
 
-        critOnlyOnSpace.setVisibilityPredicate(ignored -> !critMode.isSelected(CRIT_NONE));
-        critRange.setVisibilityPredicate(ignored -> !critMode.isSelected(CRIT_NONE));
-        critCooldown.setVisibilityPredicate(ignored -> !critMode.isSelected(CRIT_NONE));
+        critMode.setVisibilityPredicate(ignored -> hitMode.isSelected(HIT_PRIORITIZE_CRIT));
+        critOnlyOnSpace.setVisibilityPredicate(ignored -> hitMode.isSelected(HIT_PRIORITIZE_CRIT) && !critMode.isSelected(CRIT_NONE));
+        critRange.setVisibilityPredicate(ignored -> hitMode.isSelected(HIT_PRIORITIZE_CRIT) && !critMode.isSelected(CRIT_NONE));
+        critCooldown.setVisibilityPredicate(ignored -> hitMode.isSelected(HIT_ONLY_CRIT)
+                || hitMode.isSelected(HIT_CRITS_SPRINT)
+                || (hitMode.isSelected(HIT_PRIORITIZE_CRIT) && !critMode.isSelected(CRIT_NONE)));
         pingHurtTime.setVisibilityPredicate(ignored -> hurtTimeCheck.getValue());
+        dontBreakBlocks.setVisibilityPredicate(ignored -> holdToAttack.getValue());
 
         cooldown.tooltip(SECTION_TIMING);
         critCooldown.tooltip(SECTION_TIMING);
@@ -155,6 +177,7 @@ public class TriggerBot extends Module {
         itemWhitelist.tooltip(SECTION_CONDITIONS);
         hotbarWhitelist.tooltip(SECTION_CONDITIONS);
         holdToAttack.tooltip(SECTION_CONDITIONS);
+        dontBreakBlocks.tooltip(SECTION_CONDITIONS);
         noSweepOrPickHits.tooltip(SECTION_CONDITIONS);
         aimAlign.tooltip(SECTION_AIM);
         alignSpeed.tooltip(SECTION_AIM);
@@ -163,7 +186,13 @@ public class TriggerBot extends Module {
 
     @Override
     public CharSequence getSuffix() {
-        return critMode.isSelected(CRIT_NONE) ? EMPTY_SUFFIX : critMode.getValue();
+        if (hitMode.isSelected(HIT_ALWAYS)) {
+            return EMPTY_SUFFIX;
+        }
+        if (hitMode.isSelected(HIT_PRIORITIZE_CRIT) && critMode.isSelected(CRIT_NONE)) {
+            return EMPTY_SUFFIX;
+        }
+        return hitMode.getValue();
     }
 
     @Override
@@ -187,6 +216,27 @@ public class TriggerBot extends Module {
         trackedPlayer = client.player;
         trackedWorld = client.world;
         resetCombatState();
+    }
+
+    @Subscribe(priority = EventPriority.HIGH)
+    private void onAttackAttempt(AttackAttemptEvent event) {
+        if (!shouldPreventBlockBreaking()) {
+            return;
+        }
+        if (event.getTarget() == null && client.crosshairTarget instanceof BlockHitResult) {
+            event.cancel();
+        }
+    }
+
+    @Subscribe(priority = EventPriority.HIGH)
+    private void onBlockBreaking(BlockBreakingEvent.Pre event) {
+        if (!shouldPreventBlockBreaking() || !isAttackKeyHeld()) {
+            return;
+        }
+        if (client.interactionManager != null && client.interactionManager.isBreakingBlock()) {
+            client.interactionManager.cancelBlockBreaking();
+        }
+        event.cancel();
     }
 
     @Subscribe(priority = EventPriority.HIGH)
@@ -360,6 +410,22 @@ public class TriggerBot extends Module {
         return itemWhitelist.acceptsHeldItem() && hotbarWhitelist.permitsCurrentSlot();
     }
 
+    private boolean isAttackKeyHeld() {
+        return KeybindingCache.isPressed(client.options.attackKey)
+                || client.options.attackKey.isPressed();
+    }
+
+    private boolean shouldPreventBlockBreaking() {
+        return isEnabled()
+                && !isOutsideWorld()
+                && MinecraftRenderState.getScreen() == null
+                && !MinecraftRenderState.hasOverlay()
+                && holdToAttack.getValue()
+                && dontBreakBlocks.getValue()
+                && passesLoadoutConditions()
+                && !GhostHand.isTargetingGhostBlock();
+    }
+
     private boolean isPlayerBusy() {
         if (client.player.isUsingItem() || EntityInteractions.isBlocking() || EntityInteractions.isUsingOffhand()) {
             return true;
@@ -473,12 +539,21 @@ public class TriggerBot extends Module {
     }
 
     private boolean passesCooldown(double squaredDistance, boolean axeShieldBreak) {
+        TriggerBotTiming.HitMode mode = currentHitMode();
         boolean inCritRange = TriggerBotTiming.isWithinRange(
                 squaredDistance, critRange.getLower(), critRange.getUpper());
-        boolean useCritCooldown = !critMode.isSelected(CRIT_NONE)
-                && inCritRange
-                && EntityRaycasts.isCriticalState()
-                && !axeShieldBreak;
+        boolean useCritCooldown;
+        if (axeShieldBreak || mode == TriggerBotTiming.HitMode.ALWAYS) {
+            useCritCooldown = false;
+        } else if (mode == TriggerBotTiming.HitMode.ONLY_CRIT) {
+            useCritCooldown = true;
+        } else if (mode == TriggerBotTiming.HitMode.CRITS_AND_SPRINT) {
+            useCritCooldown = EntityRaycasts.isCriticalState() && !client.player.isSprinting();
+        } else {
+            useCritCooldown = !critMode.isSelected(CRIT_NONE)
+                    && inCritRange
+                    && EntityRaycasts.isCriticalState();
+        }
         float progress = client.player.getAttackCooldownProgress(0.5F);
         return TriggerBotTiming.passesCooldown(
                 progress,
@@ -490,6 +565,7 @@ public class TriggerBot extends Module {
     }
 
     private boolean passesCritWindow(double squaredDistance) {
+        TriggerBotTiming.HitMode mode = currentHitMode();
         TriggerBotTiming.CritPolicy policy = currentCritPolicy();
         boolean inCritRange = TriggerBotTiming.isWithinRange(
                 squaredDistance, critRange.getLower(), critRange.getUpper());
@@ -498,7 +574,8 @@ public class TriggerBot extends Module {
         boolean criticalFall = EntityRaycasts.isCriticalState();
         boolean fallbackAllowed = EntityRaycasts.allowsNonCriticalHit()
                 || (critOnlyOnSpace.getValue() && !jumpPressed && !client.player.isOnGround());
-        return TriggerBotTiming.allowsCriticalTiming(
+        return TriggerBotTiming.allowsHitTiming(
+                mode,
                 policy,
                 inCritRange,
                 critOnlyOnSpace.getValue(),
@@ -506,7 +583,21 @@ public class TriggerBot extends Module {
                 client.player.isOnGround(),
                 criticalFall,
                 client.player.isSprinting(),
-                fallbackAllowed);
+                fallbackAllowed,
+                EntityRaycasts.cannotCritOrSprint());
+    }
+
+    private TriggerBotTiming.HitMode currentHitMode() {
+        if (hitMode.isSelected(HIT_ALWAYS)) {
+            return TriggerBotTiming.HitMode.ALWAYS;
+        }
+        if (hitMode.isSelected(HIT_ONLY_CRIT)) {
+            return TriggerBotTiming.HitMode.ONLY_CRIT;
+        }
+        if (hitMode.isSelected(HIT_CRITS_SPRINT)) {
+            return TriggerBotTiming.HitMode.CRITS_AND_SPRINT;
+        }
+        return TriggerBotTiming.HitMode.PRIORITIZE_CRIT;
     }
 
     private TriggerBotTiming.CritPolicy currentCritPolicy() {
@@ -728,6 +819,7 @@ public class TriggerBot extends Module {
     private record TargetHit(EntityHitResult hit, LivingEntity target, double maxReach) {}
 
     public static void appendBootstrapSettings(TriggerBot Module) {
+        CatalogSettings.append(Module, hitMode);
         CatalogSettings.append(Module, critMode);
         CatalogSettings.append(Module, critOnlyOnSpace);
         CatalogSettings.append(Module, attackShields);
@@ -735,6 +827,7 @@ public class TriggerBot extends Module {
         CatalogSettings.append(Module, pingHurtTime);
         CatalogSettings.append(Module, noSweepOrPickHits);
         CatalogSettings.append(Module, holdToAttack);
+        CatalogSettings.append(Module, dontBreakBlocks);
         CatalogSettings.append(Module, cooldown);
         CatalogSettings.append(Module, critCooldown);
         CatalogSettings.append(Module, critRange);

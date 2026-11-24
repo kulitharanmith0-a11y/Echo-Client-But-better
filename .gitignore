@@ -6,3 +6,7 @@ run/
 *.log
 .DS_Store
 Thumbs.db
+echo-logo.png
+tools/discord-inbox.md
+tools/attachments/
+tools/.discord-*.json

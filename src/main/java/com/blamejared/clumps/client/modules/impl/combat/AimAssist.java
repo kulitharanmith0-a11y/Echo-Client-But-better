@@ -74,6 +74,7 @@ public class AimAssist extends Module {
         throughWalls.tooltip("Aim");
         horizontalSpeed.tooltip("Timing");
         verticalSpeed.tooltip("Timing");
+        onClick.description(CatalogText.literal("Only aims while holding the Attack key"));
         onClick.tooltip("Conditions");
         range.tooltip("Targeting");
         fovMode.tooltip("Targeting");
@@ -127,7 +128,9 @@ public class AimAssist extends Module {
             clearAim();
             return;
         }
-        if (onClick.getValue() && !KeybindingCache.isPressed(client.options.attackKey)) {
+        if (onClick.getValue()
+                && !KeybindingCache.isPressed(client.options.attackKey)
+                && !client.options.attackKey.isPressed()) {
             clearAim();
             return;
         }

@@ -99,8 +99,6 @@ public class PearlGrapple extends Module {
         super(new ModuleInfo(CatalogText.literal("Pearl Grapple"), CatalogText.literal("Throws an ender pearl that hits the best player target"), ModuleCategory.UTILITY));
     }
 
-    @Override public boolean isFilteredFromDefaultList() { return true; }
-
     @Override
     public void postInitialize() {
         phase = PearlGrapplePhase.SELECT;

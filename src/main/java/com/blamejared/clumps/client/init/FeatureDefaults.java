@@ -15,7 +15,7 @@ public final class FeatureDefaults {
         com.blamejared.clumps.client.settings.BooleanSetting preparedRandom = new com.blamejared.clumps.client.settings.BooleanSetting(CatalogText.literal("Random"), false);
         com.blamejared.clumps.client.settings.BooleanSetting preparedSilentRotations = new com.blamejared.clumps.client.settings.BooleanSetting(CatalogText.literal("Silent Rotations"), false);
         com.blamejared.clumps.client.settings.FloatSetting preparedMultipoint = new com.blamejared.clumps.client.settings.FloatSetting(CatalogText.literal("Multipoint"), 50.0f, 0.0f, 100.0f, 1.0f, CatalogText.literal("%"));
-        com.blamejared.clumps.client.settings.BooleanSetting preparedOnClick = new com.blamejared.clumps.client.settings.BooleanSetting(CatalogText.literal("On Click"), false);
+        com.blamejared.clumps.client.settings.BooleanSetting preparedOnClick = new com.blamejared.clumps.client.settings.BooleanSetting(CatalogText.literal("Hold Attack"), false);
         com.blamejared.clumps.client.settings.ChoiceSetting preparedTargetPriority = new com.blamejared.clumps.client.settings.ChoiceSetting(CatalogText.literal("Target Priority"), CatalogText.literal("Nearest"), new java.lang.CharSequence[] {CatalogText.literal("Nearest"), CatalogText.literal("FOV"), CatalogText.literal("HurtTick")});
         com.blamejared.clumps.client.settings.BooleanSetting preparedThroughWalls = new com.blamejared.clumps.client.settings.BooleanSetting(CatalogText.literal("Through Walls"), false);
         com.blamejared.clumps.client.settings.FloatSetting preparedVerticalSpeed = new com.blamejared.clumps.client.settings.FloatSetting(CatalogText.literal("Vertical Speed"), 2.0f, 0.0f, 10.0f, 0.1f);
@@ -1882,6 +1882,95 @@ public final class FeatureDefaults {
                 preparedPlaceDelay, preparedRange, preparedSilentRotations, preparedRotationSpeed);
         Module.settings.clear();
         com.blamejared.clumps.client.modules.impl.combat.PlateWeb.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(com.blamejared.clumps.client.modules.impl.world.GhostHand Module) {
+        com.blamejared.clumps.client.settings.ChoiceSetting preparedMode = new com.blamejared.clumps.client.settings.ChoiceSetting(
+                CatalogText.literal("Mode"),
+                com.blamejared.clumps.client.modules.impl.world.GhostHand.bootstrapModeAlways(),
+                new java.lang.CharSequence[] {
+                        com.blamejared.clumps.client.modules.impl.world.GhostHand.bootstrapModeAlways(),
+                        com.blamejared.clumps.client.modules.impl.world.GhostHand.bootstrapModeHoldKey()
+                });
+        com.blamejared.clumps.client.settings.KeybindSetting preparedHoldKey = new com.blamejared.clumps.client.settings.KeybindSetting(
+                CatalogText.literal("Hold Key"),
+                com.blamejared.clumps.client.keyboard.InputKey.NONE);
+        com.blamejared.clumps.client.settings.BooleanSetting preparedCobwebs = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Cobwebs"), true);
+        com.blamejared.clumps.client.settings.BooleanSetting preparedPlayersOnly = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Players Only"), true);
+        com.blamejared.clumps.client.settings.ItemListSetting preparedItemWhitelist = new com.blamejared.clumps.client.settings.ItemListSetting(
+                CatalogText.literal("Item Whitelist"));
+
+        com.blamejared.clumps.client.modules.impl.world.GhostHand.assignBootstrapSettings(
+                Module, preparedMode, preparedHoldKey, preparedCobwebs, preparedPlayersOnly, preparedItemWhitelist);
+        Module.settings.clear();
+        com.blamejared.clumps.client.modules.impl.world.GhostHand.appendBootstrapSettings(Module);
+        Module.postInitialize();
+    }
+
+    public static void initialize(com.blamejared.clumps.client.modules.impl.combat.AutoDrain Module) {
+        com.blamejared.clumps.client.settings.ChoiceSetting preparedMethod = new com.blamejared.clumps.client.settings.ChoiceSetting(
+                CatalogText.literal("Method"),
+                com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapMethodAuto(),
+                new java.lang.CharSequence[] {
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapMethodAuto(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapMethodBucket(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapMethodWebs(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapMethodBlocks()
+                });
+        com.blamejared.clumps.client.settings.ChoiceSetting preparedMode = new com.blamejared.clumps.client.settings.ChoiceSetting(
+                CatalogText.literal("Mode"),
+                com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapModeAlways(),
+                new java.lang.CharSequence[] {
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapModeAlways(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapModeOnKey()
+                });
+        com.blamejared.clumps.client.settings.KeybindSetting preparedActivateKey = new com.blamejared.clumps.client.settings.KeybindSetting(
+                CatalogText.literal("Activate Key"),
+                com.blamejared.clumps.client.keyboard.InputKey.NONE);
+        com.blamejared.clumps.client.settings.ChoiceSetting preparedTargetFilter = new com.blamejared.clumps.client.settings.ChoiceSetting(
+                CatalogText.literal("Target"),
+                com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapTargetEnemy(),
+                new java.lang.CharSequence[] {
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapTargetEnemy(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapTargetSelfEnemy(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapTargetAny()
+                });
+        com.blamejared.clumps.client.settings.BooleanSetting preparedDrainWater = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Water"), true);
+        com.blamejared.clumps.client.settings.BooleanSetting preparedDrainLava = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Lava"), true);
+        com.blamejared.clumps.client.settings.BooleanSetting preparedIgnoreLakes = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Ignore Lakes"), true);
+        com.blamejared.clumps.client.settings.ChoiceSetting preparedSwapMode = new com.blamejared.clumps.client.settings.ChoiceSetting(
+                CatalogText.literal("Swap Mode"),
+                com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapSwapLegit(),
+                new java.lang.CharSequence[] {
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapSwapLegit(),
+                        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.bootstrapSwapSilent()
+                });
+        com.blamejared.clumps.client.settings.BooleanSetting preparedSwapBack = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Swap Back"), true);
+        com.blamejared.clumps.client.settings.IntSetting preparedSwapDelay = new com.blamejared.clumps.client.settings.IntSetting(
+                CatalogText.literal("Swap Delay"), 1, 0, 5, CatalogText.literal(" ticks"));
+        com.blamejared.clumps.client.settings.IntSetting preparedDrainDelay = new com.blamejared.clumps.client.settings.IntSetting(
+                CatalogText.literal("Drain Delay"), 2, 0, 10, CatalogText.literal(" ticks"));
+        com.blamejared.clumps.client.settings.FloatSetting preparedRange = new com.blamejared.clumps.client.settings.FloatSetting(
+                CatalogText.literal("Range"), 4.5f, 2.0f, 5.5f, 0.1f, CatalogText.literal(" blocks"));
+        com.blamejared.clumps.client.settings.BooleanSetting preparedSilentRotations = new com.blamejared.clumps.client.settings.BooleanSetting(
+                CatalogText.literal("Silent Rotations"), true);
+        com.blamejared.clumps.client.settings.FloatSetting preparedRotationSpeed = new com.blamejared.clumps.client.settings.FloatSetting(
+                CatalogText.literal("Rotation Speed"), 18.0f, 5.0f, 40.0f, 1.0f);
+
+        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.assignBootstrapSettings(
+                Module, preparedMethod, preparedMode, preparedActivateKey, preparedTargetFilter,
+                preparedDrainWater, preparedDrainLava, preparedIgnoreLakes, preparedSwapMode,
+                preparedSwapBack, preparedSwapDelay, preparedDrainDelay, preparedRange,
+                preparedSilentRotations, preparedRotationSpeed);
+        Module.settings.clear();
+        com.blamejared.clumps.client.modules.impl.combat.AutoDrain.appendBootstrapSettings(Module);
         Module.postInitialize();
     }
 

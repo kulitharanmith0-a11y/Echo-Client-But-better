@@ -57,6 +57,19 @@ public final class InputState {
         }
     }
 
+    public static void simulateAttackClick(Module owner) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.currentScreen != null || client.options == null) {
+            return;
+        }
+        InputSimulator simulator = InputSimulator.get();
+        if (simulator != null) {
+            simulator.simulateAttackTap(owner);
+            return;
+        }
+        replayMouseClicks(client, client.options.attackKey, 1);
+    }
+
     private static void replayMouseClicks(MinecraftClient client, KeyBinding binding, int count) {
         if (KeybindingCache.isPressed(binding)) {
             return;

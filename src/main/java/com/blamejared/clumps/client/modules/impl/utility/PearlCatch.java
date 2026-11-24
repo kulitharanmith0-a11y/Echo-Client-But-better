@@ -21,6 +21,7 @@ import com.blamejared.clumps.client.handlers.rotation.RotationPriority;
 import com.blamejared.clumps.client.handlers.rotation.RotationScope;
 import com.blamejared.clumps.client.handlers.rotation.RotationSettings;
 import com.blamejared.clumps.client.handlers.rotation.RotationVisibility;
+import com.blamejared.clumps.client.keyboard.KeybindingCache;
 import com.blamejared.clumps.client.mixin.accessor.MinecraftClientAccessor;
 import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.FloatRangeSetting;
@@ -37,12 +38,14 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.c2s.play.ClientTickEndC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.network.packet.c2s.play.TeleportConfirmC2SPacket;
 import net.minecraft.network.packet.s2c.play.BundleS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntitiesDestroyS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntitySpawnS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Direction;
@@ -65,6 +68,7 @@ public class PearlCatch extends Module {
     private static final double VISIBLE_AIM_TOLERANCE = 0.06;
     private static final double AIM_DISTANCE = 100.0;
     private static final String HIGH_DELAY_TOOLTIP = "Timing";
+    private static final String LEGIT_TOOLTIP = "Legit Mode";
 
     private static BooleanSetting autoAim;
     private static BooleanSetting silentAim;
@@ -74,12 +78,17 @@ public class PearlCatch extends Module {
     private static KeybindSetting highPearlCatch;
     private static KeybindSetting lowPearlCatch;
     private static KeybindSetting instantPearlCatch;
+    private static final BooleanSetting legitMode = new BooleanSetting(CatalogText.literal("Legit Mode"), false);
+    private static final FloatRangeSetting legitDelay = new FloatRangeSetting(CatalogText.literal("Legit Delay"), 1.0F, 2.0F, 1.0F, 10.0F, 1.0F, CatalogText.literal(" ticks"));
+    private static final BooleanSetting legitAutoAim = new BooleanSetting(CatalogText.literal("Legit Auto Aim"), true);
 
     private PearlCatchStage normalStage;
     private PearlCatchInstantPhase instantPhase;
     private boolean previousHighPress;
     private boolean previousLowPress;
     private boolean previousInstantPress;
+    private boolean legitSequenceActive;
+    private boolean legitConsumedUntilRelease;
     private int normalStageTicks;
     private int pearlThrowTick;
     private int scheduledCatchTick;
@@ -152,14 +161,31 @@ public class PearlCatch extends Module {
         pearlSlot = -1;
         movedWindChargeToOffhand = false;
         instantPhaseTick = -1;
+        legitSequenceActive = false;
+        legitConsumedUntilRelease = false;
         silentAim.setVisibilityPredicate(ignored -> autoAim.getValue());
         retry.setVisibilityPredicate(ignored -> autoAim.getValue());
         highDelay.tooltip(HIGH_DELAY_TOOLTIP);
+        legitDelay.setVisibilityPredicate(ignored -> legitMode.getValue());
+        legitAutoAim.setVisibilityPredicate(ignored -> legitMode.getValue());
+        legitMode.tooltip(LEGIT_TOOLTIP);
+        legitDelay.tooltip(LEGIT_TOOLTIP);
+        legitAutoAim.tooltip(LEGIT_TOOLTIP);
+        legitMode.description(CatalogText.literal("Hold Right Click while holding an Ender Pearl to throw the pearl then automatically throw a Wind Charge to catch it"));
+        legitDelay.description(CatalogText.literal("Ticks after throwing the pearl before throwing the Wind Charge in Legit Mode"));
+        legitAutoAim.description(CatalogText.literal("Smoothly aims visibly onto the pearl before throwing the Wind Charge in Legit Mode"));
     }
 
     @Subscribe
     public void onTick(ClientTickEvent event) {
         if (isOutsideWorld() || client.currentScreen != null) return;
+        boolean useHeld = isUseKeyHeld();
+        if (!useHeld) {
+            legitConsumedUntilRelease = false;
+            if (legitSequenceActive && normalStage == PearlCatchStage.WAIT) {
+                resetNormalSequence(switchBack.getValue());
+            }
+        }
         handleKeyPresses();
         if (instantPhase != PearlCatchInstantPhase.IDLE) {
             advanceInstantSequence();
@@ -201,6 +227,25 @@ public class PearlCatch extends Module {
         if (event.getPacket() instanceof TeleportConfirmC2SPacket) {
             capturedOrigin = null;
             capturedVelocity = Vec3d.ZERO;
+            return;
+        }
+        if (event.getPacket() instanceof PlayerInteractItemC2SPacket interact
+                && legitMode.getValue()
+                && !legitConsumedUntilRelease
+                && normalStage == PearlCatchStage.IDLE
+                && instantPhase == PearlCatchInstantPhase.IDLE
+                && isUseKeyHeld()
+                && client.currentScreen == null) {
+            ItemStack used = interact.getHand() == Hand.OFF_HAND
+                    ? client.player.getOffHandStack()
+                    : client.player.getMainHandStack();
+            if (used.isOf(Items.ENDER_PEARL)
+                    && !client.player.getItemCooldownManager().isCoolingDown(new ItemStack(Items.WIND_CHARGE))) {
+                int windCharge = InventoryItems.findStackInHotbar(stack -> stack.getItem() == Items.WIND_CHARGE);
+                if (windCharge != -1) {
+                    beginLegitCatch();
+                }
+            }
         }
     }
 
@@ -266,11 +311,51 @@ public class PearlCatch extends Module {
                 || instantPhase == PearlCatchInstantPhase.THROW_FOLLOW_UP;
     }
 
-    private boolean usesVisibleAim() { return autoAim.getValue() && !silentAim.getValue(); }
+    private boolean usesAutoAim() {
+        return legitSequenceActive ? legitAutoAim.getValue() : autoAim.getValue();
+    }
+
+    private boolean usesSilentAim() {
+        return !legitSequenceActive && silentAim.getValue();
+    }
+
+    private boolean usesVisibleAim() { return usesAutoAim() && !usesSilentAim(); }
+
+    private boolean isUseKeyHeld() {
+        return client.options != null
+                && (KeybindingCache.isPressed(client.options.useKey) || client.options.useKey.isPressed());
+    }
+
+    private void beginLegitCatch() {
+        Vec3d origin = sequenceOrigin();
+        Vec3d velocity = sequenceVelocity();
+        Rotation rotation = rotations().effectiveRotation();
+        pearlSpawnPosition = null;
+        pearlSpawnVelocity = null;
+        pearlSpawnPlayerAge = -1;
+        pearlEntityId = -1;
+        pearlDestroyed = false;
+        positionCorrectionReceived = false;
+        retryCount = 0;
+        awaitingPearlSpawn = true;
+        float eyeHeight = currentEyeHeight();
+        Vec3d launchPosition = new Vec3d(origin.x, origin.y + eyeHeight - LAUNCH_HEIGHT_OFFSET, origin.z);
+        trajectory = new ProjectileState(launchPosition, LaunchTrajectoryMath.direction(rotation.yaw(), rotation.pitch()).multiply(1.5).add(velocity), false);
+        pearlFlightTicks = LaunchTrajectorySearch.flightTicks(trajectory);
+        pearlThrowTick = client.player.age;
+        catchDelayTicks = Math.max(1, Math.round(legitDelay.sampleGaussian()));
+        scheduledCatchTick = pearlThrowTick + catchDelayTicks;
+        lowTrajectory = false;
+        legitSequenceActive = true;
+        legitConsumedUntilRelease = true;
+        normalStage = PearlCatchStage.WAIT;
+        normalStageTicks = 0;
+    }
 
     @Override
     public void onDisable() {
         WeakRefSet.remove(this);
+        legitConsumedUntilRelease = false;
         resetNormalSequence(false);
         resetInstantSequence();
         capturedOrigin = null;
@@ -341,7 +426,7 @@ public class PearlCatch extends Module {
         planningOrigin = new Vec3d(origin.x, origin.y + currentEyeHeight(), origin.z);
         planningVelocity = sequenceVelocity();
         planningElapsedTicks = client.player.age - pearlThrowTick;
-        pendingPlan = autoAim.getValue() ? LaunchTrajectorySearch.findCatch(trajectory, planningOrigin, planningVelocity, planningElapsedTicks, pearlFlightTicks, lowTrajectory) : null;
+        pendingPlan = usesAutoAim() ? LaunchTrajectorySearch.findCatch(trajectory, planningOrigin, planningVelocity, planningElapsedTicks, pearlFlightTicks, lowTrajectory) : null;
         plannedPlayerTick = client.player.age;
         if (pendingPlan != null) activePlan = pendingPlan;
     }
@@ -392,7 +477,7 @@ public class PearlCatch extends Module {
     }
 
     private void useWithPlan(LaunchCandidate plan) {
-        if (!silentAim.getValue()) {
+        if (!usesSilentAim()) {
             actions().executeDoItemUse(this);
             return;
         }
@@ -409,7 +494,7 @@ public class PearlCatch extends Module {
         }
         if (client.player.age < scheduledCatchTick || plannedPlayerTick != client.player.age) return;
         int lateTicks = client.player.age - scheduledCatchTick;
-        if (!autoAim.getValue()) {
+        if (!usesAutoAim()) {
             throwWindCharge(slot, null);
             return;
         }
@@ -529,6 +614,7 @@ public class PearlCatch extends Module {
         DeferredActionQueue.finish(this, restore);
         normalStage = PearlCatchStage.IDLE;
         normalStageTicks = 0;
+        legitSequenceActive = false;
         pearlThrowTick = -1;
         scheduledCatchTick = -1;
         catchDelayTicks = 1;
@@ -704,6 +790,9 @@ public class PearlCatch extends Module {
         CatalogSettings.append(Module, highPearlCatch);
         CatalogSettings.append(Module, lowPearlCatch);
         CatalogSettings.append(Module, instantPearlCatch);
+        CatalogSettings.append(Module, legitMode);
+        CatalogSettings.append(Module, legitDelay);
+        CatalogSettings.append(Module, legitAutoAim);
     }
 
     

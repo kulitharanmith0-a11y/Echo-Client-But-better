@@ -52,6 +52,7 @@ jobs:
           CLIENT_VERSION: ${{ github.event.inputs.version }}
         run: |
           START_EPOCH=$(date +%s)
+          sed -i 's/\r$//' gradlew
           chmod +x gradlew
           ./gradlew :build -Pclient_release="$CLIENT_VERSION" --no-daemon
           END_EPOCH=$(date +%s)

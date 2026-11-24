@@ -51,11 +51,15 @@ public class ShieldBreaker extends Module {
     public static IntSetting stunChance;
     public static ItemListSetting itemWhitelist;
     public static HotbarSlotsSetting hotbarWhitelist;
+    private static final long STUN_FOLLOWUP_WINDOW_TICKS = 8L;
     private CooldownTimer attackTimer;
     private CooldownTimer switchTimer;
     private int selectedAxeSlot;
     private PlayerEntity shieldTarget;
-    private PlayerEntity previousShieldTarget;
+    private int stunFollowupTargetId = -1;
+    private long stunReadyAtTick;
+    private long stunExpiresAtTick;
+    private boolean stunWaitingForSwapBack;
     private PlayerEntity timedAttackTarget;
     private boolean attackDelayActive;
     private boolean switchDelayActive;
@@ -158,10 +162,41 @@ public class ShieldBreaker extends Module {
             event.setClickCount(0);
             return;
         }
-        if (previousShieldTarget != null) {
-            previousShieldTarget = null;
-            if (!Targets.shieldBreakActive && !event.hasClicks()) event.addClick();
-            Targets.shieldBreakActive = false;
+        if (stunFollowupTargetId != -1) {
+            if (AutoMaceSwap.hasPendingSwap() || AutoMaceSwap.isStunSequenceRunning()) {
+                clearStunFollowup();
+                return;
+            }
+            long age = client.player.age;
+            if (age > stunExpiresAtTick) {
+                clearStunFollowup();
+                Targets.shieldBreakActive = false;
+                return;
+            }
+            if (age < stunReadyAtTick) {
+                Targets.shieldBreakActive = true;
+                return;
+            }
+            if (stunWaitingForSwapBack && DeferredActionQueue.contains(this)) {
+                Targets.shieldBreakActive = true;
+                return;
+            }
+            stunWaitingForSwapBack = false;
+            if (EntityInteractions.isBlocking() || client.attackCooldown > 0) {
+                Targets.shieldBreakActive = true;
+                return;
+            }
+            if (client.crosshairTarget instanceof EntityHitResult hit
+                    && hit.getEntity() instanceof PlayerEntity target
+                    && target.getId() == stunFollowupTargetId
+                    && target.isAlive() && !target.isRemoved()) {
+                if (event.hasClicks() || actions().requestAttackClick(this, event)) {
+                    clearStunFollowup();
+                    Targets.shieldBreakActive = false;
+                }
+                return;
+            }
+            Targets.shieldBreakActive = true;
             return;
         }
         Targets.shieldBreakActive = false;
@@ -196,6 +231,7 @@ public class ShieldBreaker extends Module {
     }
 
     private void handleClickAttack(AttackKeyEvent event) {
+        if (AutoMaceSwap.isStunSequenceRunning()) return;
         if (!event.hasClicks() || !passesItemConditions()) return;
         if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) return;
         if (EntityInteractions.isUsingOffhand()) return;
@@ -214,6 +250,7 @@ public class ShieldBreaker extends Module {
     }
 
     private void handleNormalAttack(AttackKeyEvent event) {
+        if (AutoMaceSwap.isStunSequenceRunning()) return;
         if (!passesItemConditions()) return;
         if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) return;
         PlayerEntity target = findShieldTarget();
@@ -251,9 +288,22 @@ public class ShieldBreaker extends Module {
     private void addShieldAttack(AttackKeyEvent event, PlayerEntity target) {
         if (!event.hasClicks() && !actions().requestAttackClick(this, event)) return;
         Targets.currentTarget = target;
-        if (stun.getValue() && passesStunChance()) previousShieldTarget = target;
+        if (stun.getValue() && passesStunChance() && client.player != null) {
+            stunFollowupTargetId = target.getId();
+            stunReadyAtTick = client.player.age + 1L;
+            stunExpiresAtTick = client.player.age + STUN_FOLLOWUP_WINDOW_TICKS;
+            stunWaitingForSwapBack = swapBack.getValue() && DeferredActionQueue.contains(this);
+            Targets.shieldBreakActive = true;
+        }
         attackDelayActive = true;
         switchTimer.reset();
+    }
+
+    private void clearStunFollowup() {
+        stunFollowupTargetId = -1;
+        stunReadyAtTick = 0L;
+        stunExpiresAtTick = 0L;
+        stunWaitingForSwapBack = false;
     }
 
     private boolean passesStunChance() {
@@ -322,8 +372,7 @@ public class ShieldBreaker extends Module {
         selectedAxeSlot = -1;
         initializePlayerEntityClass();
         shieldTarget = null;
-        initializePlayerEntityClass();
-        previousShieldTarget = null;
+        clearStunFollowup();
         ownShieldReleased = false;
         restoreShieldRequested = false;
         unblockTickPending = false;

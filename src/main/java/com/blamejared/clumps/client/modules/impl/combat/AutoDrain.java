@@ -4,6 +4,10 @@ import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.HandleInputEvent;
 import com.blamejared.clumps.client.event.input.MouseMovementEvent;
+import com.blamejared.clumps.client.event.interaction.BlockInteractEvent;
+import com.blamejared.clumps.client.event.interaction.ItemUseEvent;
+import com.blamejared.clumps.client.event.lifecycle.WorldTickContextEvent;
+import com.blamejared.clumps.client.event.world.BlockUpdateEvent;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
 import com.blamejared.clumps.client.handlers.action.ActionCoordinator;
 import com.blamejared.clumps.client.handlers.action.ActionResultInfo;
@@ -78,6 +82,9 @@ public class AutoDrain extends Module {
     private static final double ENEMY_FLUID_RADIUS_SQ = 3.5 * 3.5;
     private static final double SELF_FLUID_RADIUS_SQ = 2.6 * 2.6;
     private static final long ATTEMPT_COOLDOWN_TICKS = 8L;
+    private static final long SELF_BUCKET_WINDOW_TICKS = 10L;
+    private static final long SELF_FLUID_TTL_TICKS = 600L;
+    private static final double SELF_FLUID_TRACK_RANGE_SQ = 6.5 * 6.5;
 
     private enum DrainKind {
         BUCKET,
@@ -110,6 +117,9 @@ public class AutoDrain extends Module {
     public static FloatSetting rotationSpeed;
 
     private final Map<BlockPos, Long> recentlyAttempted = new HashMap<>();
+    private final Map<BlockPos, Long> selfPlacedFluids = new HashMap<>();
+    private long lastSelfBucketTick = -100L;
+    private boolean lastSelfBucketWasWater;
     private DrainPlan activePlan;
     private int cooldownTicks;
     private int swapWaitTicks;
@@ -196,6 +206,93 @@ public class AutoDrain extends Module {
     }
 
     @Subscribe
+    private void onWorldContext(WorldTickContextEvent event) {
+        selfPlacedFluids.clear();
+        recentlyAttempted.clear();
+        lastSelfBucketTick = -100L;
+    }
+
+    @Subscribe(priority = EventPriority.HIGH)
+    private void onItemUse(ItemUseEvent.Pre event) {
+        if (isOutsideWorld() || event.getPlayer() != client.player) {
+            return;
+        }
+        recordSelfBucketUse(event.getStack(), event.getHit());
+    }
+
+    @Subscribe(priority = EventPriority.HIGH)
+    private void onBlockInteract(BlockInteractEvent.Post event) {
+        if (isOutsideWorld() || event.getPlayer() != client.player) {
+            return;
+        }
+        ItemStack stack = client.player.getStackInHand(event.getHand());
+        recordSelfBucketUse(stack, event.getHit());
+    }
+
+    @Subscribe
+    private void onBlockUpdate(BlockUpdateEvent event) {
+        if (isOutsideWorld() || client.player == null) {
+            return;
+        }
+        BlockPos pos = event.getPosition();
+        BlockState state = event.getState();
+        if (pos == null) {
+            return;
+        }
+        FluidState fluid = state != null ? state.getFluidState() : null;
+        if (fluid == null || fluid.isEmpty() || !fluid.isStill()) {
+            selfPlacedFluids.remove(pos);
+            return;
+        }
+        long age = client.player.age;
+        if (age - lastSelfBucketTick <= SELF_BUCKET_WINDOW_TICKS) {
+            boolean matchesType = lastSelfBucketWasWater ? fluid.isIn(FluidTags.WATER) : fluid.isIn(FluidTags.LAVA);
+            if (matchesType && client.player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(pos)) <= SELF_FLUID_TRACK_RANGE_SQ) {
+                selfPlacedFluids.put(pos.toImmutable(), age + SELF_FLUID_TTL_TICKS);
+            }
+        }
+    }
+
+    private void recordSelfBucketUse(ItemStack stack, HitResult hit) {
+        if (stack == null || stack.isEmpty() || client.player == null || client.world == null) {
+            return;
+        }
+        boolean isWaterBucket = stack.isOf(Items.WATER_BUCKET);
+        boolean isLavaBucket = stack.isOf(Items.LAVA_BUCKET);
+        if (!isWaterBucket && !isLavaBucket) {
+            return;
+        }
+        long age = client.player.age;
+        lastSelfBucketTick = age;
+        lastSelfBucketWasWater = isWaterBucket;
+        long expiresAt = age + SELF_FLUID_TTL_TICKS;
+
+        BlockHitResult blockHit = hit instanceof BlockHitResult bhr && bhr.getType() == HitResult.Type.BLOCK ? bhr : null;
+        if (blockHit == null) {
+            Rotation effective = rotations().effectiveRotation();
+            Vec3d eye = client.player.getEyePos();
+            Vec3d look = effective != null
+                    ? Vec3d.fromPolar(effective.pitch(), effective.yaw())
+                    : client.player.getRotationVec(1.0F);
+            double reach = Math.max(4.5, client.player.getBlockInteractionRange());
+            BlockHitResult ray = client.world.raycast(new RaycastContext(
+                    eye,
+                    eye.add(look.multiply(reach)),
+                    RaycastContext.ShapeType.OUTLINE,
+                    RaycastContext.FluidHandling.NONE,
+                    client.player));
+            if (ray != null && ray.getType() == HitResult.Type.BLOCK) {
+                blockHit = ray;
+            }
+        }
+        if (blockHit != null) {
+            BlockPos hitPos = blockHit.getBlockPos();
+            selfPlacedFluids.put(hitPos.toImmutable(), expiresAt);
+            selfPlacedFluids.put(hitPos.offset(blockHit.getSide()).toImmutable(), expiresAt);
+        }
+    }
+
+    @Subscribe
     private void onMouseMovement(MouseMovementEvent.Post event) {
         if (disablePending) {
             if (!rotations().beginReturn(this)) {
@@ -249,8 +346,13 @@ public class AutoDrain extends Module {
             clearActivePlan();
             return;
         }
+        if (AutoWeb.isClearingSelfActive()) {
+            abortPendingLegitAction();
+            clearActivePlan();
+            return;
+        }
 
-        pruneAttempted(client.player.age);
+        pruneTrackedMaps(client.player.age);
 
         // Complete pending legit swap-back when idle
         if (returnSlot != -1 && returnWaitTicks == 0 && !pendingLegitAction) {
@@ -453,6 +555,12 @@ public class AutoDrain extends Module {
         if (state == null) {
             return false;
         }
+        if (AutoWeb.isSelfClearWaterPos(pos)) {
+            return false;
+        }
+        if (!targetFilter.isSelected(TARGET_ANY) && selfPlacedFluids.containsKey(pos)) {
+            return false;
+        }
         FluidState fluid = state.getFluidState();
         if (fluid == null || fluid.isEmpty() || !fluid.isStill()) {
             return false;
@@ -610,14 +718,29 @@ public class AutoDrain extends Module {
         return yawDiff <= AIM_TOLERANCE_DEGREES && pitchDiff <= AIM_TOLERANCE_DEGREES;
     }
 
-    private void pruneAttempted(long nowTick) {
-        if (recentlyAttempted.isEmpty()) {
-            return;
+    private void pruneTrackedMaps(long nowTick) {
+        if (!recentlyAttempted.isEmpty()) {
+            Iterator<Map.Entry<BlockPos, Long>> iterator = recentlyAttempted.entrySet().iterator();
+            while (iterator.hasNext()) {
+                if (nowTick >= iterator.next().getValue()) {
+                    iterator.remove();
+                }
+            }
         }
-        Iterator<Map.Entry<BlockPos, Long>> iterator = recentlyAttempted.entrySet().iterator();
-        while (iterator.hasNext()) {
-            if (nowTick >= iterator.next().getValue()) {
-                iterator.remove();
+        if (!selfPlacedFluids.isEmpty()) {
+            Iterator<Map.Entry<BlockPos, Long>> iterator = selfPlacedFluids.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<BlockPos, Long> entry = iterator.next();
+                if (nowTick >= entry.getValue()) {
+                    iterator.remove();
+                    continue;
+                }
+                if (nowTick - lastSelfBucketTick > SELF_BUCKET_WINDOW_TICKS && client.world != null) {
+                    FluidState fluid = client.world.getFluidState(entry.getKey());
+                    if (fluid == null || fluid.isEmpty() || !fluid.isStill()) {
+                        iterator.remove();
+                    }
+                }
             }
         }
     }

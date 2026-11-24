@@ -92,7 +92,7 @@ public class DtapSetup extends Module {
 
     public DtapSetup() {
         super(new ModuleInfo(
-                CatalogText.literal("Dtap Setup"),
+                CatalogText.literal("Auto Hit Crystal"),
                 CatalogText.literal("Automatically places obsidian and swaps to end crystals when pressing your crystal bind"),
                 ModuleCategory.COMBAT));
     }

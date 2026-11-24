@@ -1611,8 +1611,20 @@ public final class DashboardController {
         painter(renderer).panel(pillX, y + 24.5f, pillW, 21.0f, 6.0f, 0xFF112C24, 1.0f, 0xFF2E7D63);
         painter(renderer).text(FontAsset.INTER_SEMI_BOLD, verLabel, pillX + 8.0f, y + 28.0f, 11.5f, 0xFF6EE7B7);
 
-        String trimmedSummary = summary.length() > 68 ? summary.substring(0, 65) + "..." : summary;
-        painter(renderer).text(FontAsset.INTER, trimmedSummary, titleX, y + 50.0f, 13.0f, 0xA8E2E8F0);
+        List<com.blamejared.clumps.client.updater.AutoUpdater.ChangelogItem> items =
+                com.blamejared.clumps.client.updater.AutoUpdater.getChangelogItems();
+        String headerSub;
+        float summaryMaxW = w - 148.0f;
+        if (summary != null && !summary.isEmpty()
+                && painter(renderer).textWidth(FontAsset.INTER, summary, 13.0f) <= summaryMaxW) {
+            headerSub = summary;
+        } else {
+            int count = items.size();
+            headerSub = count == 1
+                    ? "1 change in this release - scroll below for full details"
+                    : count + " changes in this release - scroll below for full details";
+        }
+        painter(renderer).text(FontAsset.INTER, headerSub, titleX, y + 50.0f, 13.0f, 0xA8E2E8F0);
 
         // Top-right close X button
         boolean closeHover = rawContainsPointer(x + w - 54.0f, y + 26.0f, 30.0f, 30.0f);
@@ -1622,8 +1634,6 @@ public final class DashboardController {
         drawRule(renderer, x, y + 86.0f, w, 1.0f, 0xFF1D242C);
 
         // Section label
-        List<com.blamejared.clumps.client.updater.AutoUpdater.ChangelogItem> items =
-                com.blamejared.clumps.client.updater.AutoUpdater.getChangelogItems();
         painter(renderer).text(FontAsset.INTER_SEMI_BOLD, "WHAT CHANGED IN THIS RELEASE", x + 24.0f, y + 99.0f, 10.5f, 0x8094A3B8);
 
         // Scrollable changelog list
@@ -1653,22 +1663,32 @@ public final class DashboardController {
                 tagBg = 0xFF211633; tagBorder = 0xFF5D3591; tagText = 0xFFC084FC;
             }
 
+            float tagW = Math.max(40.0f, painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, tag, 10.5f) + 14.0f);
+            float titleMaxW = Math.max(120.0f, listW - tagW - 38.0f);
+            List<String> titleLines = wrapModalText(renderer, itemTitle, FontAsset.INTER_SEMI_BOLD, 13.0f, titleMaxW);
+            if (titleLines.isEmpty()) {
+                titleLines = List.of("");
+            }
             List<String> detailLines = detail != null && !detail.isEmpty()
                     ? wrapModalText(renderer, detail, FontAsset.INTER, 12.5f, listW - 32.0f)
                     : List.of();
-            float cardH = 40.0f + (detailLines.isEmpty() ? 0.0f : 6.0f + detailLines.size() * 17.5f);
+            float titleBlockH = Math.max(20.0f, titleLines.size() * 18.0f);
+            float detailBlockH = detailLines.isEmpty() ? 0.0f : 6.0f + detailLines.size() * 17.5f;
+            float cardH = 22.0f + titleBlockH + detailBlockH;
 
             if (cursorY + cardH >= listY - 8.0f && cursorY <= listY + listH + 8.0f) {
                 painter(renderer).panel(listX, cursorY, listW, cardH, 9.0f, 0xFF13171F, 1.0f, 0xFF212936);
 
-                float tagW = Math.max(40.0f, painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, tag, 10.5f) + 14.0f);
                 painter(renderer).panel(listX + 14.0f, cursorY + 11.0f, tagW, 19.0f, 5.0f, tagBg, 1.0f, tagBorder);
                 new DashboardWidgetRenderer(painter(renderer)).centeredText(FontAsset.INTER_SEMI_BOLD, tag, listX + 14.0f + tagW * 0.5f, cursorY + 14.0f, 10.5f, tagText);
 
-                String safeTitle = itemTitle.length() > 62 ? itemTitle.substring(0, 59) + "..." : itemTitle;
-                painter(renderer).text(FontAsset.INTER_SEMI_BOLD, safeTitle, listX + 24.0f + tagW, cursorY + 12.5f, 13.5f, 0xFFF8FAFC);
+                float titleLineY = cursorY + 12.0f;
+                for (String titleLine : titleLines) {
+                    painter(renderer).text(FontAsset.INTER_SEMI_BOLD, titleLine, listX + 24.0f + tagW, titleLineY, 13.0f, 0xFFF8FAFC);
+                    titleLineY += 18.0f;
+                }
 
-                float lineY = cursorY + 38.0f;
+                float lineY = cursorY + 12.0f + titleBlockH + 6.0f;
                 for (String line : detailLines) {
                     painter(renderer).text(FontAsset.INTER, line, listX + 14.0f, lineY, 12.5f, 0xB8CBD5E1);
                     lineY += 17.5f;
@@ -1719,13 +1739,13 @@ public final class DashboardController {
                 lines.add(current.toString());
                 current.setLength(0);
                 current.append(word);
-                if (lines.size() >= 3) break;
+                if (lines.size() >= 12) break;
             } else {
                 if (!current.isEmpty()) current.append(' ');
                 current.append(word);
             }
         }
-        if (!current.isEmpty() && lines.size() < 4) {
+        if (!current.isEmpty() && lines.size() < 12) {
             lines.add(current.toString());
         }
         return lines;

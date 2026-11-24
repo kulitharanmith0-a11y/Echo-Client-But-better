@@ -2,6 +2,7 @@ package com.blamejared.clumps.client.modules.impl.combat;
 
 import static com.blamejared.clumps.client.init.CatalogText.literal;
 
+import com.blamejared.clumps.client.ClumpsClient;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.AttackKeyEvent;
@@ -46,6 +47,7 @@ import com.blamejared.clumps.client.utils.strings.Concat;
 import com.blamejared.clumps.client.utils.targeting.AimPointMode;
 import com.blamejared.clumps.client.utils.targeting.AimPointSettings;
 import com.blamejared.clumps.client.utils.targeting.AttackEvaluation;
+import com.blamejared.clumps.client.utils.targeting.AttackRange;
 import com.blamejared.clumps.client.utils.targeting.EntityPredicates;
 import com.blamejared.clumps.client.utils.targeting.EntityRaycasts;
 import com.blamejared.clumps.client.utils.targeting.TargetSelection;
@@ -311,6 +313,20 @@ public class AutoMaceSwap extends Module {
 
     public static boolean hasPendingSwap() {
         return DeferredActionQueue.contains(AutoMaceSwap.class);
+    }
+
+    public static boolean isStunSequenceRunning() {
+        if (ClumpsClient.ModuleManager == null) {
+            return false;
+        }
+        Module feature = ClumpsClient.ModuleManager.findFeature(AutoMaceSwap.class);
+        if (!(feature instanceof AutoMaceSwap module) || !module.isEnabled() || module.isOutsideWorld()) {
+            return false;
+        }
+        return module.isStunSequenceActive() || (stunSlam != null && stunSlam.getValue()
+                && autoAxeStun != null && autoAxeStun.getValue()
+                && !module.client.player.isOnGround() && !module.client.player.isGliding()
+                && module.isSmashReady());
     }
 
     @Subscribe
@@ -721,9 +737,11 @@ public class AutoMaceSwap extends Module {
         }
         int ticks = Math.max(1, Math.round(stunSwitchDelay.sampleGaussian()));
         int airTicks = MovementSimulation.ticksUntilGround(MovementSimulation.fallSamples(0));
-        if (airTicks > 0 && airTicks <= ticks) {
-            // Avoid waiting past ground touchdown at high fall speed while staying strictly >= 1 tick apart.
-            ticks = Math.max(1, airTicks - 1);
+        double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+        if (fallSpeed >= 0.85 || (airTicks > 0 && airTicks <= Math.max(2, ticks))) {
+            // Fast dive or near touchdown: slam on the very next tick (strictly >= 1 tick apart)
+            // so the mace hits while still airborne with full fall distance.
+            ticks = 1;
         }
         scheduledMaceSlot = slot;
         scheduledTargetId = target.getId();
@@ -818,51 +836,65 @@ public class AutoMaceSwap extends Module {
         if (client.player.isOnGround() || client.player.isGliding() || client.player.isUsingItem()) {
             return;
         }
+        if (!stunSlam.getValue() || !autoAxeStun.getValue() || InventoryItems.holdsAxe()) {
+            return;
+        }
         double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
         double totalSpeed = client.player.getVelocity().length();
-        if (fallSpeed < 0.85 && totalSpeed < 1.0) {
+        if (fallSpeed < 0.40 && totalSpeed < 0.65 && !isSmashReady()) {
             return;
         }
         if (!canInitiateHotbarSwap()) {
             return;
         }
-        MaceImpactPrediction prediction = predictImpact(2);
-        if (prediction == null || prediction.impactTick() < 1 || prediction.impactTick() > 2) {
+        // Only pre-swap early to an AXE for blocking targets so the axe is ready on the very first
+        // tick entering 3.0-block reach (enabling Tick T axe break -> Tick T+1 airborne mace slam).
+        // Never pre-swap early to a Mace for non-blocking hits so same-tick Sword/Axe/Spear -> Mace
+        // attribute swapping preserves full base damage and attack cooldown progress.
+        LivingEntity incoming = null;
+        MaceImpactPrediction prediction = predictImpact(3);
+        if (prediction != null && prediction.impactTick() >= 1 && prediction.impactTick() <= 3) {
+            incoming = TargetSelection.resolveTarget(prediction.target());
+        }
+        if (incoming == null || !TargetSelection.isValidTarget(incoming) || !isBlockingTarget(incoming)) {
+            incoming = findApproachingBlockingTarget();
+        }
+        if (incoming == null || !isBlockingTarget(incoming) || !checkStunReactionElapsed(incoming)) {
             return;
         }
-        LivingEntity incoming = TargetSelection.resolveTarget(prediction.target());
-        if (incoming == null || !TargetSelection.isValidTarget(incoming)) {
-            return;
-        }
-        if (stunSlam.getValue() && autoAxeStun.getValue() && isBlockingTarget(incoming)
-                && checkStunReactionElapsed(incoming)) {
-            if (!InventoryItems.holdsAxe()) {
-                int axeSlot = InventoryItems.findStackInHotbar(InventoryItems::isAxe);
-                if (axeSlot != -1 && !suspendItemUse()) {
-                    preSwapSlot = client.player.getInventory().getSelectedSlot();
-                    int ticks = Math.max(4, Math.round(stunSwitchDelay.getUpper()) + AXE_AWAIT_WINDOW_TICKS + 2);
-                    if (DeferredActionQueue.select(this, axeSlot, ticks, false, null)) {
-                        enterAxeAwait(incoming.getId());
-                    }
-                }
-            }
-            return;
-        }
-        if (!isBlockingTarget(incoming) && !InventoryItems.mainHandStack().isOf(Items.MACE) && fallSpeed >= 1.05) {
-            double projectedFall = ServerFallDistanceTracker.fallDistance(client.player) + fallSpeed;
-            if (isSmashReady() || projectedFall > fallDistance.getValue()) {
-                int maceSlot = findTargetMaceSlot();
-                if (maceSlot == -1) {
-                    maceSlot = InventoryItems.findMaceWithEnchantmentInHotbar(null, true);
-                }
-                if (maceSlot != -1 && maceSlot != client.player.getInventory().getSelectedSlot() && !suspendItemUse()) {
-                    preSwapSlot = client.player.getInventory().getSelectedSlot();
-                    DeferredActionQueue.select(this, maceSlot,
-                            Math.max(3, (int) delay.sampleGaussian() + 2),
-                            returnTo.isSelected(RETURN_ORIGINAL), this::onSwapEnded);
-                }
+        int axeSlot = InventoryItems.findStackInHotbar(InventoryItems::isAxe);
+        if (axeSlot != -1 && !suspendItemUse()) {
+            preSwapSlot = client.player.getInventory().getSelectedSlot();
+            int ticks = Math.max(5, Math.round(stunSwitchDelay.getUpper()) + AXE_AWAIT_WINDOW_TICKS + 3);
+            if (DeferredActionQueue.select(this, axeSlot, ticks, false, null)) {
+                enterAxeAwait(incoming.getId());
+                Targets.shieldBreakActive = true;
             }
         }
+    }
+
+    private LivingEntity findApproachingBlockingTarget() {
+        if (client.world == null || client.player == null) {
+            return null;
+        }
+        Vec3d eye = client.player.getCameraPosVec(1.0F);
+        double maxApproachSq = 7.5 * 7.5;
+        LivingEntity closest = null;
+        double closestDistSq = Double.MAX_VALUE;
+        for (PlayerEntity player : client.world.getPlayers()) {
+            if (player == client.player || !TargetSelection.isValidTarget(player)) {
+                continue;
+            }
+            if (!isBlockingTarget(player)) {
+                continue;
+            }
+            double distSq = player.getBoundingBox().squaredMagnitude(eye);
+            if (distSq <= maxApproachSq && distSq < closestDistSq) {
+                closestDistSq = distSq;
+                closest = player;
+            }
+        }
+        return closest;
     }
 
     private void processScheduledStunFollowup() {
@@ -1706,17 +1738,21 @@ public class AutoMaceSwap extends Module {
             double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
             float velocityBoost = (float) MathHelper.clamp(1.0 + Math.max(speed - 0.35, fallSpeed - 0.30) * 1.35, 1.0, 3.0);
             if (silent) {
-                boolean stunActive = activeStunTarget() != null;
+                boolean stunActive = activeStunTarget() != null || isStunSequenceActive();
                 boolean urgent = stunActive || isSmashReady() || hasEquipmentSwap(false) || attackPending;
                 if (!urgent && target != null) {
-                    double reach = MovementSimulation.attackRange() + 1.5;
+                    double reach = currentWeaponReach() + 1.5;
                     urgent = target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F)) <= reach * reach;
                 }
-                float scale = (stunActive ? 3.5F : urgent ? 2.6F : 1.75F) * velocityBoost;
+                float scale = (stunActive ? 4.8F : urgent ? 2.6F : 1.75F) * velocityBoost;
                 hSpeed *= scale;
                 vSpeed *= scale;
+                if (stunActive) {
+                    transition = AimTransition.EASED;
+                }
             } else {
-                float visibleBoost = MathHelper.clamp(velocityBoost, 1.0F, 2.4F);
+                boolean stunActive = activeStunTarget() != null || isStunSequenceActive();
+                float visibleBoost = MathHelper.clamp(velocityBoost * (stunActive ? 1.65F : 1.0F), 1.0F, 3.8F);
                 hSpeed *= visibleBoost;
                 vSpeed *= visibleBoost;
             }
@@ -1747,33 +1783,49 @@ public class AutoMaceSwap extends Module {
         return !client.player.isGliding() && ServerFallDistanceTracker.fallDistance(client.player) > fallDistance.getValue();
     }
 
+    private double currentWeaponReach() {
+        if (client.player == null) {
+            return 3.0;
+        }
+        double vanillaReach = Math.max(0.0, client.player.getEntityInteractionRange());
+        ItemStack held = client.player.getMainHandStack();
+        if (held != null && !held.isEmpty() && InventoryItems.isSpear(held.getItem())) {
+            return Math.max(vanillaReach, AttackRange.getEffectiveMaxRange(client.player));
+        }
+        return vanillaReach;
+    }
+
     private LivingEntity crosshairLivingTarget() {
-        if (client.crosshairTarget instanceof EntityHitResult entityHit
+        double allowedReach = currentWeaponReach();
+        if (client.player != null
+                && client.crosshairTarget instanceof EntityHitResult entityHit
                 && entityHit.getEntity() instanceof LivingEntity target
                 && target.isAlive() && !target.isRemoved()) {
-            return target;
+            Vec3d eye = client.player.getCameraPosVec(1.0F);
+            if (eye.squaredDistanceTo(entityHit.getPos()) <= allowedReach * allowedReach + 1.0E-4) {
+                return target;
+            }
         }
         // High fall speed / grand velocity fallback: if vanilla crosshairTarget is 1-frame stale,
-        // verify a live raycast along our active effective rotation strictly within vanilla reach.
+        // verify a live raycast along our active effective rotation strictly within current weapon reach.
         if (autoAim.getValue() && client.player != null && client.world != null && rotations().isOwnedBy(this)) {
-            return raycastEffectiveRotationTarget();
+            return raycastEffectiveRotationTarget(allowedReach);
         }
         return null;
     }
 
-    private LivingEntity raycastEffectiveRotationTarget() {
+    private LivingEntity raycastEffectiveRotationTarget(double reach) {
         var effective = rotations().effectiveRotation();
-        if (effective == null) {
+        if (effective == null || reach <= 0.0) {
             return null;
         }
-        double reach = client.player.getEntityInteractionRange();
         Vec3d start = client.player.getCameraPosVec(1.0F);
         Vec3d look = Vec3d.fromPolar(effective.pitch(), effective.yaw());
         Vec3d end = start.add(look.multiply(reach));
         Vec3d limitedEnd = end;
         if (!throughWalls.getValue()) {
             BlockHitResult blockHit = client.world.raycast(new RaycastContext(
-                    start, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
+                    start, end, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, client.player));
             if (blockHit != null && blockHit.getType() == HitResult.Type.BLOCK) {
                 limitedEnd = blockHit.getPos();
             }

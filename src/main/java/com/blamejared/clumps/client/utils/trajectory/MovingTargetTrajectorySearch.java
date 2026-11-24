@@ -8,8 +8,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToDoubleFunction;
 import net.minecraft.entity.EntityDimensions;
+import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.registry.tag.FluidTags;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -17,7 +21,8 @@ import net.minecraft.world.RaycastContext;
 
 public final class MovingTargetTrajectorySearch implements MinecraftAccess {
     private static final Vec3d[] SPREAD = TrajectoryNumerics.movingTargetSpread();
-    private static final float[] ANGLE_OFFSETS = {0.0F, -0.4F, 0.4F, -0.8F, 0.8F};
+    private static final float[] ANGLE_OFFSETS = {0.0F, -0.35F, 0.35F, -0.75F, 0.75F, -1.25F, 1.25F};
+    private static final EntityDimensions GLIDING_DIMENSIONS = EntityDimensions.changing(0.6F, 0.6F);
 
     private MovingTargetTrajectorySearch() {
     }
@@ -112,6 +117,19 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
                 }
             }
         }
+        boolean gliding = player != null && (player.isGliding() || player.getPose() == EntityPose.GLIDING);
+        if (gliding) {
+            // Elytra gliding follows smooth aerodynamic inertia rather than -0.08 free-fall gravity.
+            if (samples.size() >= 2) {
+                PositionSample prev = samples.get(samples.size() - 2);
+                int recentDt = Math.max(1, latest.tick() - prev.tick());
+                Vec3d recentVel = latest.position().subtract(prev.position()).multiply(1.0 / recentDt);
+                if (recentVel.lengthSquared() <= 9.0) {
+                    velocity = velocity.lerp(recentVel, 0.55);
+                }
+            }
+            return new Result(latest.position(), velocity, latest.tick(), false, samples.size() >= 2, yawRate, 0.99);
+        }
         double heightChange = latest.position().y - samples.get(0).position().y;
         boolean stationaryHeight = Math.abs(heightChange) < 0.01 * Math.max(1, elapsed);
         if (latest.onGround() && stationaryHeight) {
@@ -166,16 +184,20 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
     }
 
     public static Box[] predictBoxes(PlayerEntity player, Result motion, double age, int ticks) {
-        EntityDimensions dimensions = player.getDimensions(player.getPose());
+        boolean gliding = player != null && (player.isGliding() || player.getPose() == EntityPose.GLIDING);
+        // Gliding players shrink to a 0.6 x 0.6 x 0.6 hitbox anchored directly at their feet (y .. y + 0.6).
+        EntityDimensions dimensions = gliding ? GLIDING_DIMENSIONS : player.getDimensions(player.getPose());
         int steps = (int) Math.ceil(Math.max(0.0, age) + ticks) + 1;
         Vec3d[] positions = new Vec3d[steps + 1];
         Vec3d position = motion.position();
         Vec3d velocity = motion.velocity();
-        boolean airborne = motion.airborne();
+        boolean airborne = motion.airborne() && !gliding;
         positions[0] = position;
         for (int step = 1; step <= steps; step++) {
             if (airborne) {
                 velocity = new Vec3d(velocity.x * motion.horizontalDrag(), (velocity.y - 0.08) * 0.98, velocity.z * motion.horizontalDrag());
+            } else if (gliding) {
+                velocity = new Vec3d(velocity.x * 0.99, velocity.y * 0.985, velocity.z * 0.99);
             }
             if (motion.yawRate() != 0.0) {
                 velocity = velocity.rotateY((float) -motion.yawRate());
@@ -304,7 +326,6 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
         Vec3d position = path.launchPosition();
         Vec3d velocity = direction.add(spread).multiply(1.5).add(path.inheritedVelocity());
         for (int tick = 1; tick <= horizon; tick++) {
-            velocity = velocity.subtract(0.0, 0.03, 0.0).multiply(0.99);
             Vec3d next = position.add(velocity);
             if (path.targetBoxes()[tick].expand(TrajectoryTolerance.collisionExpansion(tick)).raycast(position, next).isPresent()) {
                 return tick;
@@ -321,7 +342,52 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
                 }
             }
             position = next;
+            velocity = velocity.multiply(0.99).subtract(0.0, 0.03, 0.0);
         }
         return 0;
+    }
+
+    /**
+     * Simulates an in-flight ender pearl using exact vanilla pearl physics (drag 0.99 in air / 0.8 in water,
+     * gravity 0.03 per tick) and returns the landing position, or {@code null} if it never hits within {@code maxTicks}.
+     */
+    public static Vec3d predictPearlLanding(Vec3d startPos, Vec3d startVel, int maxTicks) {
+        if (CLIENT.world == null || CLIENT.player == null || startPos == null || startVel == null) {
+            return null;
+        }
+        Vec3d pos = startPos;
+        Vec3d vel = startVel;
+        for (int tick = 0; tick < maxTicks; tick++) {
+            Vec3d next = pos.add(vel);
+            BlockHitResult blockHit = CLIENT.world.raycast(new RaycastContext(
+                    pos, next, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, CLIENT.player));
+            if (blockHit != null && blockHit.getType() != HitResult.Type.MISS) {
+                return blockHit.getPos();
+            }
+            boolean inWater = CLIENT.world.getFluidState(BlockPos.ofFloored(next)).isIn(FluidTags.WATER);
+            pos = next;
+            vel = vel.multiply(inWater ? 0.8 : 0.99).subtract(0.0, 0.03, 0.0);
+        }
+        return null;
+    }
+
+    /**
+     * Solves a ballistic ender pearl launch from {@code launchPos} (with {@code inheritedVelocity})
+     * directly to a static landing point {@code landingPos}.
+     */
+    public static MovingTargetLaunch findLaunchToPoint(Vec3d launchPos, Vec3d inheritedVelocity, Vec3d landingPos, int maxTicks) {
+        if (CLIENT.world == null || launchPos == null || landingPos == null) {
+            return null;
+        }
+        int horizon = Math.max(10, Math.min(maxTicks, 100));
+        Box targetBox = new Box(
+                landingPos.x - 0.55, landingPos.y - 0.35, landingPos.z - 0.55,
+                landingPos.x + 0.55, landingPos.y + 0.75, landingPos.z + 0.55);
+        Box[] boxes = new Box[horizon + 1];
+        for (int i = 0; i <= horizon; i++) {
+            boxes[i] = targetBox;
+        }
+        TargetPath staticPath = new TargetPath(launchPos, inheritedVelocity == null ? Vec3d.ZERO : inheritedVelocity, boxes, List.of());
+        return findLaunch(staticPath);
     }
 }

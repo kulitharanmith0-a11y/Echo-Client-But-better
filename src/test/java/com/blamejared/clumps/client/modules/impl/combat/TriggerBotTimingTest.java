@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.blamejared.clumps.client.modules.impl.combat.TriggerBotTiming.CritPolicy;
-import com.blamejared.clumps.client.modules.impl.combat.TriggerBotTiming.HitMode;
 import org.junit.jupiter.api.Test;
 
 class TriggerBotTimingTest {
@@ -62,32 +61,5 @@ class TriggerBotTimingTest {
         assertTrue(TriggerBotTiming.isTargetAcquisitionStillValid(42, 42, 1000L, 1120L, 150L));
         assertFalse(TriggerBotTiming.isTargetAcquisitionStillValid(42, 42, 1000L, 1200L, 150L));
         assertFalse(TriggerBotTiming.isTargetAcquisitionStillValid(42, 99, 1000L, 1050L, 150L));
-    }
-
-    @Test
-    void hitModesEnforceAlwaysOnlyCritPrioritizeCritAndCritsPlusSprint() {
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.ALWAYS, CritPolicy.PRECISE, true, false, false, false, false, true, false, false));
-
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.ONLY_CRIT, CritPolicy.NONE, true, false, false, false, true, false, false, false));
-        assertFalse(TriggerBotTiming.allowsHitTiming(
-                HitMode.ONLY_CRIT, CritPolicy.PRECISE, true, false, false, true, false, false, true, false));
-        assertFalse(TriggerBotTiming.allowsHitTiming(
-                HitMode.ONLY_CRIT, CritPolicy.PRECISE, true, false, false, false, true, true, false, false));
-
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.PRIORITIZE_CRIT, CritPolicy.PRECISE, true, false, false, true, false, false, true, false));
-        assertFalse(TriggerBotTiming.allowsHitTiming(
-                HitMode.PRIORITIZE_CRIT, CritPolicy.PRECISE, true, false, false, false, false, false, false, false));
-
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.CRITS_AND_SPRINT, CritPolicy.PRECISE, true, false, false, true, false, true, true, false));
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.CRITS_AND_SPRINT, CritPolicy.PRECISE, true, false, false, false, true, false, false, false));
-        assertFalse(TriggerBotTiming.allowsHitTiming(
-                HitMode.CRITS_AND_SPRINT, CritPolicy.PRECISE, true, false, false, true, false, false, true, false));
-        assertTrue(TriggerBotTiming.allowsHitTiming(
-                HitMode.CRITS_AND_SPRINT, CritPolicy.PRECISE, true, false, false, true, false, false, true, true));
     }
 }

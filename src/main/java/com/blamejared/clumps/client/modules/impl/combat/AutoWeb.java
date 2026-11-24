@@ -1,10 +1,14 @@
 package com.blamejared.clumps.client.modules.impl.combat;
 
+import com.blamejared.clumps.client.ClumpsClient;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.HandleInputEvent;
 import com.blamejared.clumps.client.event.input.MouseMovementEvent;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
+import com.blamejared.clumps.client.handlers.EntityPositionTracker;
+import com.blamejared.clumps.client.handlers.LatencyTracker;
+import com.blamejared.clumps.client.handlers.PositionSample;
 import com.blamejared.clumps.client.handlers.action.ActionCoordinator;
 import com.blamejared.clumps.client.handlers.action.ActionResultInfo;
 import com.blamejared.clumps.client.handlers.rotation.AimTransition;
@@ -109,6 +113,43 @@ public class AutoWeb extends Module {
 
     private static boolean isLegitSwap() {
         return swapMode == null || swapMode.isSelected(SWAP_LEGIT);
+    }
+
+    public static boolean isClearingSelfActive() {
+        if (ClumpsClient.ModuleManager == null) {
+            return false;
+        }
+        Module feature = ClumpsClient.ModuleManager.findFeature(AutoWeb.class);
+        if (!(feature instanceof AutoWeb module) || !module.isEnabled() || module.isOutsideWorld()) {
+            return false;
+        }
+        if (module.placedWaterPos != null || module.pendingClearPlace || module.pendingClearPickup || module.waterAimPoint != null) {
+            return true;
+        }
+        return autoClearSelf != null && autoClearSelf.getValue()
+                && module.findSelfCobwebPos() != null
+                && InventoryItems.findStackInHotbar(stack -> stack.isOf(Items.WATER_BUCKET)) != -1;
+    }
+
+    public static boolean isSelfClearWaterPos(BlockPos pos) {
+        if (pos == null || ClumpsClient.ModuleManager == null) {
+            return false;
+        }
+        Module feature = ClumpsClient.ModuleManager.findFeature(AutoWeb.class);
+        if (!(feature instanceof AutoWeb module) || !module.isEnabled()) {
+            return false;
+        }
+        BlockPos placed = module.placedWaterPos;
+        if (placed != null && placed.getManhattanDistance(pos) <= 2) {
+            return true;
+        }
+        if (autoClearSelf != null && autoClearSelf.getValue() && module.client.player != null) {
+            BlockPos selfWeb = module.findSelfCobwebPos();
+            if (selfWeb != null && selfWeb.getManhattanDistance(pos) <= 2) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -674,6 +715,7 @@ public class AutoWeb extends Module {
         for (PlayerEntity target : targets) {
             BlockPos actualFeet = target.getBlockPos();
             BlockPos predictedFeet = predictTargetFeet(target, lead);
+            BlockPos midFeet = lead >= 2 ? predictTargetFeet(target, Math.max(1, lead / 2)) : predictedFeet;
 
             // If target's feet are already webbed and Double Web is enabled, place head web directly on top
             if (doubleWeb.getValue() && isCobweb(actualFeet) && !isCobweb(actualFeet.up())) {
@@ -686,6 +728,12 @@ public class AutoWeb extends Module {
             PlacementTarget feetPlacement = tryBuildWebPlacement(predictedFeet, eye, maxRangeSq);
             if (feetPlacement != null) {
                 return feetPlacement;
+            }
+            if (!midFeet.equals(predictedFeet) && !midFeet.equals(actualFeet)) {
+                PlacementTarget midPlacement = tryBuildWebPlacement(midFeet, eye, maxRangeSq);
+                if (midPlacement != null) {
+                    return midPlacement;
+                }
             }
             if (!predictedFeet.equals(actualFeet)) {
                 PlacementTarget actualFeetPlacement = tryBuildWebPlacement(actualFeet, eye, maxRangeSq);
@@ -741,15 +789,116 @@ public class AutoWeb extends Module {
         if (leadTicks <= 0) {
             return target.getBlockPos();
         }
-        double vx = target.getX() - target.lastX;
-        double vz = target.getZ() - target.lastZ;
-        double predX = target.getX() + vx * leadTicks;
-        double predZ = target.getZ() + vz * leadTicks;
-        BlockPos predicted = BlockPos.ofFloored(predX, target.getY() + 0.05, predZ);
+        Vec3d velocity = estimateTargetVelocity(target);
+        double latencyLead = Math.min(2.5, LatencyTracker.milliseconds() / 100.0);
+        double swapLead = isLegitSwap() && !client.player.getMainHandStack().isOf(Items.COBWEB)
+                ? Math.max(0, swapDelay.getValue()) * 0.5
+                : 0.0;
+        double totalLead = Math.min(8.0, leadTicks + latencyLead + swapLead);
+        int steps = Math.max(1, MathHelper.ceil(totalLead));
+        double stepScale = totalLead / steps;
+
+        double x = target.getX();
+        double y = target.getY();
+        double z = target.getZ();
+        double vx = velocity.x;
+        double vy = velocity.y;
+        double vz = velocity.z;
+        boolean onGround = target.isOnGround();
+
+        for (int i = 0; i < steps; i++) {
+            double nextX = x + vx * stepScale;
+            double nextZ = z + vz * stepScale;
+            BlockPos horizCheck = BlockPos.ofFloored(nextX, y + 0.1, nextZ);
+            if (client.world.getBlockState(horizCheck).isReplaceable()) {
+                x = nextX;
+                z = nextZ;
+            } else {
+                vx = 0.0;
+                vz = 0.0;
+            }
+
+            if (!onGround || vy > 0.02) {
+                double nextY = y + vy * stepScale;
+                BlockPos belowCheck = BlockPos.ofFloored(x, nextY - 0.05, z);
+                BlockState belowState = client.world.getBlockState(belowCheck);
+                if (vy <= 0.0 && !belowState.isReplaceable() && !belowState.isOf(Blocks.COBWEB)) {
+                    y = belowCheck.getY() + 1.0;
+                    vy = 0.0;
+                    onGround = true;
+                } else {
+                    y = nextY;
+                    vy = (vy - 0.08 * stepScale) * Math.pow(0.98, stepScale);
+                    onGround = false;
+                }
+            }
+
+            double drag = onGround ? 0.94 : 0.91;
+            vx *= Math.pow(drag, stepScale);
+            vz *= Math.pow(drag, stepScale);
+        }
+
+        // If still airborne near the ground while falling/ending a jump, snap down to the landing cell
+        BlockPos predicted = BlockPos.ofFloored(x, y + 0.05, z);
+        if (!onGround && vy <= 0.15) {
+            for (int drop = 0; drop <= 2; drop++) {
+                BlockPos candidate = predicted.down(drop);
+                BlockState candidateState = client.world.getBlockState(candidate);
+                BlockState underState = client.world.getBlockState(candidate.down());
+                if (candidateState.isReplaceable() && !underState.isReplaceable()) {
+                    return candidate;
+                }
+            }
+        }
         if (client.world.getBlockState(predicted).isReplaceable()) {
             return predicted;
         }
+        BlockPos abovePredicted = predicted.up();
+        if (client.world.getBlockState(abovePredicted).isReplaceable()) {
+            return abovePredicted;
+        }
         return target.getBlockPos();
+    }
+
+    private Vec3d estimateTargetVelocity(PlayerEntity target) {
+        List<PositionSample> history = EntityPositionTracker.positions(target);
+        if (history != null && history.size() >= 2) {
+            PositionSample newest = history.get(history.size() - 1);
+            int currentTick = EntityPositionTracker.currentTick();
+            if (currentTick - newest.tick() <= 4) {
+                // Find an earlier sample 2..5 ticks back to smooth out 3-tick server entity interpolation
+                PositionSample earlier = null;
+                for (int i = history.size() - 2; i >= 0; i--) {
+                    PositionSample sample = history.get(i);
+                    int dt = newest.tick() - sample.tick();
+                    if (dt >= 2 && dt <= 6) {
+                        earlier = sample;
+                        if (dt >= 3) {
+                            break;
+                        }
+                    } else if (dt > 6) {
+                        break;
+                    }
+                }
+                if (earlier == null) {
+                    earlier = history.get(history.size() - 2);
+                }
+                int dt = Math.max(1, newest.tick() - earlier.tick());
+                Vec3d delta = newest.position().subtract(earlier.position());
+                double perTickSq = delta.lengthSquared() / (dt * dt);
+                // Ignore teleport spikes (> 2.5 blocks/tick)
+                if (perTickSq <= 6.25) {
+                    return delta.multiply(1.0 / dt);
+                }
+            }
+        }
+        double dx = target.getX() - target.lastX;
+        double dy = target.getY() - target.lastY;
+        double dz = target.getZ() - target.lastZ;
+        if (dx * dx + dy * dy + dz * dz > 1.0E-5) {
+            return new Vec3d(dx, dy, dz);
+        }
+        return target.getVelocity();
     }
 
     private boolean isValidWebTarget(PlayerEntity player, Vec3d eye, double maxRangeSq, float maxFov) {

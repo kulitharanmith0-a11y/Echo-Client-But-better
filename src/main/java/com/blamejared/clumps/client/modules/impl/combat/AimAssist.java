@@ -168,7 +168,7 @@ public class AimAssist extends Module {
 
     private AimTransition transition() {
         if (aimMath.isSelected(NATURAL)) return AimTransition.NATURAL;
-        return aimMath.isSelected(BLATANT) ? AimTransition.SNAP : AimTransition.EASED;
+        return aimMath.isSelected(BLATANT) ? AimTransition.SNAP : AimTransition.LEGIT_SMOOTH;
     }
 
     private boolean isWithinFov(LivingEntity target) {

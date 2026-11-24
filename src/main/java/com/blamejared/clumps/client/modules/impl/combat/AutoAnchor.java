@@ -32,9 +32,9 @@ import com.blamejared.clumps.client.settings.FloatSetting;
 import com.blamejared.clumps.client.settings.IntSetting;
 import com.blamejared.clumps.client.settings.KeybindSetting;
 import com.blamejared.clumps.client.utils.items.InventoryItems;
+import com.blamejared.clumps.client.utils.placement.AnchorController;
 import com.blamejared.clumps.client.utils.placement.BlockPlacement;
 import com.blamejared.clumps.client.utils.placement.PlacementTarget;
-import com.blamejared.clumps.client.utils.placement.SystemAnchorController;
 import com.blamejared.clumps.client.utils.targeting.BlockFaceSamples;
 import com.blamejared.clumps.client.utils.targeting.BlockRaycasts;
 import com.blamejared.clumps.client.utils.targeting.ExplosionDamage;
@@ -68,8 +68,8 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShapes;
 
 public class AutoAnchor extends Module {
-    private static final CharSequence styleOption = CatalogText.literal("Blatant");
-    private static final CharSequence styleOption2 = CatalogText.literal("Legit");
+    private static final CharSequence styleOption = CatalogText.literal("Smart");
+    private static final CharSequence styleOption2 = CatalogText.literal("Classic");
     private static final CharSequence modeOption = CatalogText.literal("Hold");
     private static final CharSequence modeOption2 = CatalogText.literal("Click");
     private static final int USE_COOLDOWN_TICKS = 4;
@@ -79,7 +79,7 @@ public class AutoAnchor extends Module {
     private static final int EXPLODED_ANCHOR_TIMEOUT_TICKS = 20;
     private static final int PHASE_TIMEOUT_TICKS = 40;
     private static ChoiceSetting style;
-    private static SystemAnchorController systemController = new SystemAnchorController(ignored -> !isBlatantStyle());
+    private static AnchorController anchorController = new AnchorController(ignored -> !isBlatantStyle());
     private static ChoiceSetting mode;
     private static KeybindSetting activateKey;
     private static BooleanSetting glowstoneStart;
@@ -162,7 +162,8 @@ public class AutoAnchor extends Module {
         chargeDelay.setVisibilityPredicate(new Predicate<>() { public boolean test(Object ignored) { return isBlatantStyle(); } });
         explodeSlot.setVisibilityPredicate(new Predicate<>() { public boolean test(Object ignored) { return isBlatantStyle(); } });
         explodeDelay.setVisibilityPredicate(new Predicate<>() { public boolean test(Object ignored) { return isBlatantStyle(); } });
-        settings.addAll(systemController.getSettings());
+        anchorController.setOwner(this);
+        settings.addAll(anchorController.getSettings());
         if (style != null && !style.isSelected(styleOption) && !style.isSelected(styleOption2)) {
             style.setValueSilently(styleOption2);
         }
@@ -177,30 +178,26 @@ public class AutoAnchor extends Module {
         chargeDelay.tooltip(actionTimingSection);
         explodeSlot.tooltip(actionTimingSection);
         explodeDelay.tooltip(actionTimingSection);
-        if (systemSafetySection == null) systemSafetySection = "Safety";
-        systemController.whileUse.tooltip(systemSafetySection);
-        systemController.friendSafe.tooltip(systemSafetySection);
-        systemController.stopOnKill.tooltip(systemSafetySection);
-        systemController.antiDamageTick.tooltip(systemSafetySection);
-        systemController.onlyOwn.tooltip(systemSafetySection);
-        systemController.onlyCharge.tooltip(systemSafetySection);
-        if (systemSafeAnchorSection == null) systemSafeAnchorSection = "Safe Anchor";
-        systemController.safeAnchor.tooltip(systemSafeAnchorSection);
-        systemController.safeBlockDelay.tooltip(systemSafeAnchorSection);
-        if (systemSwitchSection == null) systemSwitchSection = "Switch";
-        systemController.switchDelay.tooltip(systemSwitchSection);
-        systemController.switchChance.tooltip(systemSwitchSection);
         if (systemChargeSection == null) systemChargeSection = "Charge";
-        systemController.placeChance.tooltip(systemChargeSection);
-        systemController.glowstoneDelay.tooltip(systemChargeSection);
-        systemController.glowstoneChance.tooltip(systemChargeSection);
+        anchorController.autoCharge.tooltip(systemChargeSection);
+        anchorController.chargeChance.tooltip(systemChargeSection);
+        anchorController.charges.tooltip(systemChargeSection);
+        anchorController.glowstoneDelay.tooltip(systemChargeSection);
+        anchorController.glowstoneChance.tooltip(systemChargeSection);
         if (systemExplodeSection == null) systemExplodeSection = "Explode";
-        systemController.explodeDelay.tooltip(systemExplodeSection);
-        systemController.explodeChance.tooltip(systemExplodeSection);
-        systemController.explodeSlot.tooltip(systemExplodeSection);
-        if (systemAirplaceSection == null) systemAirplaceSection = "Airplace";
-        systemController.doubleAnchor.tooltip(systemAirplaceSection);
-        systemController.airplaceKey.tooltip(systemAirplaceSection);
+        anchorController.autoExplode.tooltip(systemExplodeSection);
+        anchorController.explodeSlot.tooltip(systemExplodeSection);
+        anchorController.explodeDelay.tooltip(systemExplodeSection);
+        anchorController.explodeChance.tooltip(systemExplodeSection);
+        if (systemSafeAnchorSection == null) systemSafeAnchorSection = "Safe Anchor";
+        anchorController.safeAnchor.tooltip(systemSafeAnchorSection);
+        anchorController.safeBlockDelay.tooltip(systemSafeAnchorSection);
+        if (systemSafetySection == null) systemSafetySection = "Conditions";
+        anchorController.itemWhitelist.tooltip(systemSafetySection);
+        anchorController.hotbarWhitelist.tooltip(systemSafetySection);
+        if (systemSwitchSection == null) systemSwitchSection = "Switch";
+        anchorController.switchDelay.tooltip(systemSwitchSection);
+        anchorController.switchChance.tooltip(systemSwitchSection);
     }
 
     @Override public CharSequence getSuffix() { return style.getValue(); }
@@ -217,7 +214,8 @@ public class AutoAnchor extends Module {
         holdSequenceCompleted = false;
         useCooldownTicks = 0;
         resetSequence();
-        systemController.reset();
+        anchorController.setOwner(this);
+        anchorController.reset();
     }
 
     @Override
@@ -234,7 +232,7 @@ public class AutoAnchor extends Module {
         useCooldownTicks = 0;
         DeferredActionQueue.finish(this, !hasSequence());
         resetSequence();
-        systemController.reset();
+        anchorController.reset();
         initializeRotationType();
         RotationManager rotations = rotations();
         initializeRotationType();
@@ -250,7 +248,7 @@ public class AutoAnchor extends Module {
     @Subscribe
     private void onItemUse(ItemUseEvent.Pre event) {
         if (!isBlatantStyle()) {
-            systemController.onItemUse(event);
+            anchorController.onItemUse(event);
             return;
         }
         if (event.getPlayer() != client.player || event.getHand() != Hand.MAIN_HAND) return;
@@ -296,7 +294,7 @@ public class AutoAnchor extends Module {
     @Subscribe
     private void onItemUseComplete(ItemUseEvent.Post event) {
         if (!isBlatantStyle()) {
-            systemController.onItemUseComplete(event);
+            anchorController.onItemUseComplete(event);
             return;
         }
         if (client.player != null) lastUseCompletedTick = client.player.age;
@@ -331,14 +329,14 @@ public class AutoAnchor extends Module {
     @Subscribe
     private void onInputPre(HandleInputEvent.Pre event) {
         if (!isBlatantStyle()) {
-            systemController.onTick(this);
+            anchorController.onInputPre();
         }
     }
 
     @Subscribe
     private void onInputPost(HandleInputEvent.Post event) {
         if (!isBlatantStyle()) {
-            systemController.onInputPost();
+            anchorController.onInputPost();
             return;
         }
         if (useCooldownTicks > 0) useCooldownTicks--;
@@ -935,7 +933,7 @@ public class AutoAnchor extends Module {
     private boolean sentRayHits(BlockPos position) {
         if (lastSentPosition == null) return true;
         Box block = new Box(position);
-        Vec3d eye = lastSentPosition.add(0.0, client.player.getStandingEyeHeight(), 0.0);
+        Vec3d eye = lastSentPosition.add(0.0, client.player.getEyeHeight(client.player.getPose()), 0.0);
         if (block.contains(eye)) return true;
         Vec3d end = eye.add(client.player.getRotationVector(effectivePitch(), effectiveYaw()).multiply(client.player.getBlockInteractionRange()));
         return block.raycast(eye, end).isPresent();
@@ -955,6 +953,12 @@ public class AutoAnchor extends Module {
 
     @Subscribe
     private void onPacketReceive(PacketReceiveEvent event) {
+        if (!isBlatantStyle() && event.getPacket() instanceof BlockUpdateS2CPacket update) {
+            anchorController.onBlockUpdate(update);
+        }
+        if (!isBlatantStyle() && event.getPacket() instanceof ExplosionS2CPacket explosion) {
+            anchorController.onExplosion(explosion.center());
+        }
     }
 
     @Subscribe
@@ -962,12 +966,6 @@ public class AutoAnchor extends Module {
         if (event.getPacket() instanceof PlayerMoveC2SPacket movement && movement.changesPosition()) {
             lastSentPosition = new Vec3d(movement.getX(0.0), movement.getY(0.0), movement.getZ(0.0));
         }
-        if (event.getPacket() instanceof PlayerMoveC2SPacket || event.getPacket() instanceof ClientTickEndC2SPacket) {
-            suppressPacketFlush = false;
-            return;
-        }
-        if (interacting || systemController.isInteracting()) suppressPacketFlush = true;
-        if (suppressPacketFlush) event.setFlush(false);
     }
 
     private boolean rayHitsEntity(Vec3d end) {

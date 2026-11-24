@@ -83,6 +83,7 @@ public final class RotationRequest {
             case SNAP -> desired;
             case EASED -> eased(current, desired, settings.maxYawStep(), settings.maxPitchStep(), elapsedSeconds);
             case NATURAL -> natural(current, desired, settings.maxYawStep(), settings.maxPitchStep(), elapsedSeconds);
+            case LEGIT_SMOOTH -> legitSmooth(current, desired, settings.maxYawStep(), settings.maxPitchStep(), elapsedSeconds);
         };
     }
 
@@ -169,6 +170,58 @@ public final class RotationRequest {
         yawVelocity = RotationMath.smoothVelocity(yawVelocity, yaw, yawSpeed, elapsed);
         pitchVelocity = RotationMath.smoothVelocity(pitchVelocity, pitch, pitchSpeed, elapsed);
         return new Rotation(current.yaw() + yawVelocity * elapsed, current.pitch() + pitchVelocity * elapsed);
+    }
+
+    private Rotation legitSmooth(Rotation current, Rotation desired, float yawSpeed, float pitchSpeed, float elapsed) {
+        elapsed = MathHelper.clamp(elapsed, 0.001F, 0.05F);
+        float yawErr = MathHelper.wrapDegrees(desired.yaw() - current.yaw());
+        float pitchErr = desired.pitch() - current.pitch();
+        float dist = (float) Math.hypot(yawErr, pitchErr);
+
+        // Smooth cubic ease-out inside the inner 3.0-degree core so aim glides organically onto
+        // the hitbox without mechanical snapping or hard linear stops, while keeping fast catch-up.
+        float coreT = MathHelper.clamp(dist / 3.0F, 0.0F, 1.0F);
+        float smoothTaper = 0.25F + 0.75F * (coreT * coreT * (3.0F - 2.0F * coreT));
+
+        // Proportional target velocity with smooth distance-scaled catch-up and hard cap
+        float yawGain = Math.max(4.5F, yawSpeed * 0.095F);
+        float pitchGain = Math.max(3.5F, pitchSpeed * 0.085F);
+        float yawCap = Math.max(12.0F, yawSpeed * (1.15F + Math.min(0.85F, Math.abs(yawErr) / 35.0F)));
+        float pitchCap = Math.max(10.0F, pitchSpeed * (1.05F + Math.min(0.65F, Math.abs(pitchErr) / 35.0F)));
+
+        float desiredYawVel = MathHelper.clamp(yawErr * yawGain * smoothTaper, -yawCap, yawCap);
+        float desiredPitchVel = MathHelper.clamp(pitchErr * pitchGain * smoothTaper, -pitchCap, pitchCap);
+
+        // Critically damped velocity inertia: smooth acceleration out and gentle deceleration in
+        float inertiaRate = dist > 6.0F ? 14.0F : 10.5F;
+        float blend = 1.0F - (float) Math.exp(-elapsed * inertiaRate);
+        yawVelocity += (desiredYawVel - yawVelocity) * blend;
+        pitchVelocity += (desiredPitchVel - pitchVelocity) * blend;
+
+        float nextYawDelta = yawVelocity * elapsed;
+        float nextPitchDelta = pitchVelocity * elapsed;
+
+        // Prevent overshoot jitter when very close to target
+        if (Math.abs(nextYawDelta) > Math.abs(yawErr) && Math.signum(nextYawDelta) == Math.signum(yawErr)) {
+            nextYawDelta = yawErr * 0.85F;
+            yawVelocity *= 0.4F;
+        }
+        if (Math.abs(nextPitchDelta) > Math.abs(pitchErr) && Math.signum(nextPitchDelta) == Math.signum(pitchErr)) {
+            nextPitchDelta = pitchErr * 0.85F;
+            pitchVelocity *= 0.4F;
+        }
+
+        // Tiny human-hand micro-sway inside the hitbox so tracking never looks pixel-frozen
+        if (dist > 0.08F && dist < 4.5F) {
+            double t = System.nanoTime() * 1.0E-9;
+            float microScale = MathHelper.clamp(dist / 3.0F, 0.15F, 1.0F) * elapsed * 4.2F;
+            nextYawDelta += (float) Math.sin(t * 7.3) * 0.14F * microScale;
+            nextPitchDelta += (float) Math.cos(t * 5.9) * 0.09F * microScale;
+        }
+
+        return new Rotation(
+                current.yaw() + nextYawDelta,
+                MathHelper.clamp(current.pitch() + nextPitchDelta, -90.0F, 90.0F));
     }
 
     private static Vec3d randomizePoint(Vec3d point, Box box, AimPointMode mode) {

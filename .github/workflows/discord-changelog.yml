@@ -20,6 +20,18 @@ on:
         description: "Build duration text for release notification (e.g. 4m 16s)"
         required: false
         default: ""
+      commit_sha:
+        description: "Optional commit SHA to post changelog for (mode=commit)"
+        required: false
+        default: ""
+      custom_title:
+        description: "Optional custom title override for commit changelog"
+        required: false
+        default: ""
+      custom_body:
+        description: "Optional custom markdown description for commit changelog"
+        required: false
+        default: ""
 
 jobs:
   notify:
@@ -43,6 +55,9 @@ jobs:
           INPUT_MODE: ${{ github.event.inputs.mode }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_DURATION: ${{ github.event.inputs.duration }}
+          INPUT_COMMIT_SHA: ${{ github.event.inputs.commit_sha }}
+          INPUT_CUSTOM_TITLE: ${{ github.event.inputs.custom_title }}
+          INPUT_CUSTOM_BODY: ${{ github.event.inputs.custom_body }}
         run: |
           node <<'EOF'
           const fs = require("fs");
@@ -336,22 +351,38 @@ jobs:
                 }
               }
             } else {
-              const rawLog = execFileSync(
-                "git",
-                ["log", "-n", "10", "--format=%H%x1f%B%x1e"],
-                { encoding: "utf8" }
-              );
-              const entries = rawLog.split("\x1e").map((s) => s.trim()).filter(Boolean);
-              for (const entry of entries) {
-                const idx = entry.indexOf("\x1f");
-                if (idx === -1) continue;
-                const sha = entry.slice(0, idx).trim();
-                const message = entry.slice(idx + 1).trim();
-                if (!message || message.includes("[skip-discord]")) continue;
-                targetSha = sha;
-                shortSha = sha.slice(0, 7);
-                visibleCommits.push({ message });
-                break;
+              const requestedSha = (process.env.INPUT_COMMIT_SHA || "").trim();
+              const customTitle = (process.env.INPUT_CUSTOM_TITLE || "").trim();
+              const customBody = (process.env.INPUT_CUSTOM_BODY || "").trim();
+              if (requestedSha) {
+                targetSha = requestedSha;
+                shortSha = requestedSha.slice(0, 7);
+                if (customTitle || customBody) {
+                  visibleCommits.push({ message: `${customTitle || "Echo Client Update"}\n${customBody}` });
+                } else {
+                  const msg = execFileSync("git", ["show", "-s", "--format=%B", requestedSha], { encoding: "utf8" })
+                    .replace(/\[skip-discord\]/gi, "")
+                    .trim();
+                  if (msg) visibleCommits.push({ message: msg });
+                }
+              } else {
+                const rawLog = execFileSync(
+                  "git",
+                  ["log", "-n", "10", "--format=%H%x1f%B%x1e"],
+                  { encoding: "utf8" }
+                );
+                const entries = rawLog.split("\x1e").map((s) => s.trim()).filter(Boolean);
+                for (const entry of entries) {
+                  const idx = entry.indexOf("\x1f");
+                  if (idx === -1) continue;
+                  const sha = entry.slice(0, idx).trim();
+                  const message = entry.slice(idx + 1).trim();
+                  if (!message || message.includes("[skip-discord]")) continue;
+                  targetSha = sha;
+                  shortSha = sha.slice(0, 7);
+                  visibleCommits.push({ message });
+                  break;
+                }
               }
             }
 

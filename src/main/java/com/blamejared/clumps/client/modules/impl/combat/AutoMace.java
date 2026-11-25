@@ -195,7 +195,7 @@ public class AutoMace extends Module {
         }
         double approachSpeed = client.player.getVelocity().length();
         if (client.player.isGliding() || client.player.isOnGround()
-                || (client.player.getVelocity().y >= 0.05 && approachSpeed < 0.85) || hasEquipmentSwap()) {
+                || client.player.getVelocity().y >= -0.05 || hasEquipmentSwap()) {
             releaseOrCancelRotation();
             return;
         }

@@ -74,6 +74,9 @@ public class ClumpsClient implements ModInitializer, SimpleSynchronousResourceRe
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(this);
         EventBus.register(this);
         EventBus.register(DashboardController.INSTANCE);
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.install();
+        }
         com.blamejared.clumps.client.updater.AutoUpdater.checkForUpdatesAsync();
     }
 

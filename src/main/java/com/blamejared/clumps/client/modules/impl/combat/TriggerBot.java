@@ -77,6 +77,7 @@ public class TriggerBot extends Module {
     private static final CharSequence SECTION_AIM = CatalogText.literal("Aim");
 
     private static final long SHIELD_BREAK_FOLLOWUP_TICKS = 12L;
+    private static final long ACQUISITION_GRACE_MILLIS = 220L;
 
     private static ChoiceSetting critMode;
     private static BooleanSetting critOnlyOnSpace;
@@ -326,11 +327,21 @@ public class TriggerBot extends Module {
                 && InventoryItems.isAxe(client.player.getMainHandStack());
 
         if (!passesHurtTime(target, axeShieldBreak)) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("TriggerBot.Skip.HurtTime");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("tb:ht", 150L, "TriggerBot", "SKIP",
+                        "reason=HURT_TIME ht=" + target.hurtTime + " rem=" + AttackCooldownTracker.remainingAttackCooldown(target));
+            }
             return;
         }
 
         double squaredDistance = client.player.getCameraPosVec(1.0F).squaredDistanceTo(targetHit.hit().getPos());
         if (!passesCooldown(squaredDistance, axeShieldBreak)) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("TriggerBot.Skip.Cooldown");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("tb:cd", 200L, "TriggerBot", "SKIP",
+                        String.format("reason=COOLDOWN prog=%.2f req=%.2f", client.player.getAttackCooldownProgress(0.5F), sampledGroundCooldown));
+            }
             return;
         }
         if (!reactionTimer.hasElapsedMillis((double) reactionDelayMillis)) {
@@ -340,14 +351,35 @@ public class TriggerBot extends Module {
             return;
         }
         if (!axeShieldBreak && !passesCritWindow(squaredDistance)) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("TriggerBot.Skip.CritWindow");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("tb:crit", 200L, "TriggerBot", "SKIP",
+                        "reason=CRIT_WINDOW ground=" + client.player.isOnGround() + " sprint=" + client.player.isSprinting());
+            }
             return;
         }
         if (noSweepOrPickHits.getValue() && (EntityRaycasts.wouldSweepAttack() || EntityRaycasts.wouldPickHit())) {
             return;
         }
 
-        if (!actions().requestAttackClick(this, event)) {
+        boolean vanillaCrosshairMatches = client.crosshairTarget instanceof EntityHitResult hit
+                && hit.getEntity() == target;
+        boolean executed = vanillaCrosshairMatches
+                ? actions().requestAttackClick(this, event)
+                : actions().executeEntityAttack(this, target, true).succeeded();
+        if (!executed) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("TriggerBot.Skip.ActionDenied");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("TriggerBot", "DENY",
+                        "crosshair=" + vanillaCrosshairMatches + " target=" + target.getName().getString());
+            }
             return;
+        }
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("TriggerBot.Attack");
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("TriggerBot", "ATTACK",
+                    String.format("target=%s dist=%.2f crosshair=%s axeBreak=%s",
+                            target.getName().getString(), Math.sqrt(squaredDistance), vanillaCrosshairMatches, axeShieldBreak));
         }
         rotations().acknowledgeRotation();
         if (axeShieldBreak) {
@@ -571,7 +603,7 @@ public class TriggerBot extends Module {
 
     private void updateTargetAcquisition(int targetId, long nowMs) {
         if (!TriggerBotTiming.isTargetAcquisitionStillValid(
-                acquiredTargetId, targetId, acquiredLastSeenMs, nowMs, TriggerBotTiming.TARGET_GRACE_MILLIS)) {
+                acquiredTargetId, targetId, acquiredLastSeenMs, nowMs, ACQUISITION_GRACE_MILLIS)) {
             acquiredTargetId = targetId;
             reactionTimer.reset();
             reactionDelayMillis = sampleDelayMillis(reactionDelay);
@@ -581,7 +613,7 @@ public class TriggerBot extends Module {
 
     private void expireTargetAcquisitionIfNeeded(long nowMs) {
         if (acquiredTargetId >= 0
-                && nowMs - acquiredLastSeenMs > TriggerBotTiming.TARGET_GRACE_MILLIS) {
+                && nowMs - acquiredLastSeenMs > ACQUISITION_GRACE_MILLIS) {
             clearTargetAcquisition();
         }
     }

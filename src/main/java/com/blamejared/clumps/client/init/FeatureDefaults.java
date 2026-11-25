@@ -1792,13 +1792,13 @@ public final class FeatureDefaults {
                 });
         com.blamejared.clumps.client.settings.ChoiceSetting preparedTrigger = new com.blamejared.clumps.client.settings.ChoiceSetting(
                 CatalogText.literal("Trigger"),
-                com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerNoCart(),
+                com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerFillSlots(),
                 new java.lang.CharSequence[] {
-                        com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerNoCart(),
-                        com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerFillSlots()
+                        com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerFillSlots(),
+                        com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapTriggerNoCart()
                 });
         com.blamejared.clumps.client.settings.HotbarSlotsSetting preparedHotbarSlots = new com.blamejared.clumps.client.settings.HotbarSlotsSetting(
-                CatalogText.literal("Hotbar Slots"));
+                CatalogText.literal("Selected Slots"));
         com.blamejared.clumps.client.settings.ChoiceSetting preparedPickOrder = new com.blamejared.clumps.client.settings.ChoiceSetting(
                 CatalogText.literal("Pick From Inv"),
                 com.blamejared.clumps.client.modules.impl.utility.CartRefill.bootstrapPickClosest(),
@@ -1814,7 +1814,7 @@ public final class FeatureDefaults {
         com.blamejared.clumps.client.settings.FloatRangeSetting preparedCloseDelay = new com.blamejared.clumps.client.settings.FloatRangeSetting(
                 CatalogText.literal("Close Delay"), 40.0f, 100.0f, 0.0f, 400.0f, 10.0f, CatalogText.literal(" ms"));
         com.blamejared.clumps.client.settings.BooleanSetting preparedOnlyEmptySlot = new com.blamejared.clumps.client.settings.BooleanSetting(
-                CatalogText.literal("Only Empty Slot"), true);
+                CatalogText.literal("Only Empty Slot"), false);
         com.blamejared.clumps.client.settings.BooleanSetting preparedPauseOnUse = new com.blamejared.clumps.client.settings.BooleanSetting(
                 CatalogText.literal("Pause On Use"), true);
 

@@ -6,6 +6,7 @@ import com.blamejared.clumps.client.init.CatalogSettings;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.AttackKeyEvent;
+import com.blamejared.clumps.client.event.input.HandleInputEvent;
 import com.blamejared.clumps.client.event.input.HotbarKeyEvent;
 import com.blamejared.clumps.client.event.input.UseKeyEvent;
 import com.blamejared.clumps.client.modules.ModuleCategory;
@@ -56,6 +57,9 @@ public class ShieldBreaker extends Module {
     private CooldownTimer attackTimer;
     private CooldownTimer switchTimer;
     private int selectedAxeSlot;
+    private int preSwapSlot = -1;
+    private int pendingReturnSlot = -1;
+    private int pendingReturnRetries;
     private PlayerEntity shieldTarget;
     private int stunFollowupTargetId = -1;
     private long stunReadyAtTick;
@@ -133,6 +137,24 @@ public class ShieldBreaker extends Module {
         super.onDisable();
     }
 
+    @Subscribe(priority = EventPriority.HIGH)
+    private void onHandleInputPre(HandleInputEvent.Pre event) {
+        if (pendingReturnSlot == -1 || isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+            return;
+        }
+        int targetSlot = pendingReturnSlot;
+        if (client.player.getInventory().getSelectedSlot() == targetSlot) {
+            pendingReturnSlot = -1;
+            pendingReturnRetries = 0;
+            return;
+        }
+        if (actions().executeSlotSelect(this, targetSlot, true).succeeded()
+                || ++pendingReturnRetries >= 12) {
+            pendingReturnSlot = -1;
+            pendingReturnRetries = 0;
+        }
+    }
+
     @Subscribe
     private void onHotbarKey(HotbarKeyEvent event) {
         if (event.slot == 0) {
@@ -147,8 +169,12 @@ public class ShieldBreaker extends Module {
         selectedAxeSlot = -1;
         int ticks = Math.max(0, Math.round(swapBackDelay.sampleGaussian()));
         boolean restoreAll = swapBack.getValue() && returnTo.isSelected(returnToOption);
+        if (!DeferredActionQueue.contains(this) && client.player != null) {
+            preSwapSlot = client.player.getInventory().getSelectedSlot();
+        }
         if (!DeferredActionQueue.select(this, event.slot, ticks, restoreAll, this::onSwapEnded)) {
             shieldTarget = null;
+            preSwapSlot = -1;
             return;
         }
         event.addClick();
@@ -157,7 +183,8 @@ public class ShieldBreaker extends Module {
     public static boolean isShieldBreakPending() {
         ShieldBreaker inst = activeInstance;
         return inst != null && inst.isEnabled()
-                && (inst.stunFollowupTargetId != -1 || inst.shieldTarget != null || inst.unblockTickPending);
+                && (inst.stunFollowupTargetId != -1 || inst.shieldTarget != null
+                || inst.unblockTickPending || inst.pendingReturnSlot != -1);
     }
 
     @Subscribe(priority = EventPriority.LOWEST)
@@ -178,6 +205,11 @@ public class ShieldBreaker extends Module {
             }
             long age = client.player.age;
             if (age > stunExpiresAtTick) {
+                if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ShieldBreaker.Stun.Expired");
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("ShieldBreaker", "STUN_EXPIRED",
+                            "targetId=" + stunFollowupTargetId + " slot=" + client.player.getInventory().getSelectedSlot());
+                }
                 clearStunFollowup();
                 Targets.shieldBreakActive = false;
                 return;
@@ -186,7 +218,7 @@ public class ShieldBreaker extends Module {
                 Targets.shieldBreakActive = true;
                 return;
             }
-            if (stunWaitingForSwapBack && DeferredActionQueue.contains(this)) {
+            if (stunWaitingForSwapBack && (DeferredActionQueue.contains(this) || pendingReturnSlot != -1)) {
                 Targets.shieldBreakActive = true;
                 return;
             }
@@ -200,6 +232,11 @@ public class ShieldBreaker extends Module {
                     && target.getId() == stunFollowupTargetId
                     && target.isAlive() && !target.isRemoved()) {
                 if (event.hasClicks() || actions().requestAttackClick(this, event)) {
+                    if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                        com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ShieldBreaker.Stun.Fired");
+                        com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("ShieldBreaker", "STUN_FIRED",
+                                "target=" + target.getName().getString() + " slot=" + client.player.getInventory().getSelectedSlot());
+                    }
                     clearStunFollowup();
                     Targets.shieldBreakActive = false;
                 }
@@ -254,7 +291,12 @@ public class ShieldBreaker extends Module {
         if (slot == -1 || DeferredActionQueue.contains(this)) return;
         int ticks = Math.max(0, Math.round(swapBackDelay.sampleGaussian()));
         boolean restoreAll = swapBack.getValue() && returnTo.isSelected(returnToOption);
-        if (!DeferredActionQueue.select(this, slot, ticks, restoreAll, this::onSwapEnded)) return;
+        preSwapSlot = client.player.getInventory().getSelectedSlot();
+        if (!DeferredActionQueue.select(this, slot, ticks, restoreAll, this::onSwapEnded)) {
+            preSwapSlot = -1;
+            return;
+        }
+        actions().adoptSyntheticAttackOwner(this);
         addShieldAttack(event, target);
     }
 
@@ -297,6 +339,12 @@ public class ShieldBreaker extends Module {
     private void addShieldAttack(AttackKeyEvent event, PlayerEntity target) {
         if (!event.hasClicks() && !actions().requestAttackClick(this, event)) return;
         Targets.currentTarget = target;
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ShieldBreaker.Break");
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("ShieldBreaker", "SHIELD_BREAK",
+                    "mode=" + mode.getValue() + " target=" + target.getName().getString()
+                            + " swapBack=" + swapBack.getValue() + " stun=" + stun.getValue());
+        }
         if (stun.getValue() && passesStunChance() && client.player != null) {
             stunFollowupTargetId = target.getId();
             stunReadyAtTick = client.player.age + 1L;
@@ -355,8 +403,17 @@ public class ShieldBreaker extends Module {
         if (swapBack.getValue() && !returnTo.isSelected(returnToOption)) {
             int slot = returnTo.isSelected(returnToOption2) ? returnSlots.chooseSelectedSlot()
                 : InventoryItems.findStackInHotbar(stack -> returnItems.isEntrySelected(stack.getItem()));
-            if (slot != -1) InventoryItems.selectHotbarSlot(slot);
+            if (slot == -1 && preSwapSlot >= 0 && preSwapSlot <= 8) {
+                slot = preSwapSlot;
+            }
+            if (slot != -1 && client.player != null && client.player.getInventory().getSelectedSlot() != slot) {
+                if (!actions().executeSlotSelect(this, slot, true).succeeded()) {
+                    pendingReturnSlot = slot;
+                    pendingReturnRetries = 0;
+                }
+            }
         }
+        preSwapSlot = -1;
         if (!mode.isSelected(modeOption2) || !ownShieldReleased) return;
         if (swapBack.getValue()) restoreShieldRequested = true;
         else ownShieldReleased = false;
@@ -379,6 +436,9 @@ public class ShieldBreaker extends Module {
 
     private void resetShieldBreakState() {
         selectedAxeSlot = -1;
+        preSwapSlot = -1;
+        pendingReturnSlot = -1;
+        pendingReturnRetries = 0;
         initializePlayerEntityClass();
         shieldTarget = null;
         clearStunFollowup();

@@ -85,6 +85,7 @@ public class AutoWeb extends Module {
     public static BooleanSetting autoClearSelf;
 
     private PlacementTarget activePlacement;
+    private float activeTargetSpeedFactor;
     private Vec3d waterAimPoint;
     private BlockPos placedWaterPos;
     private long placedWaterTick = -1L;
@@ -254,7 +255,8 @@ public class AutoWeb extends Module {
             releaseRotation();
             return;
         }
-        float speed = rotationSpeed.getValue() * 20.0F;
+        float speedBoost = waterAimPoint != null ? 1.0F : 1.0F + activeTargetSpeedFactor * 0.70F;
+        float speed = rotationSpeed.getValue() * 20.0F * speedBoost;
         RotationSettings settings = new RotationSettings(
                 silentRotations.getValue() ? RotationVisibility.SILENT : RotationVisibility.VISIBLE,
                 AimTransition.EASED,
@@ -714,40 +716,57 @@ public class AutoWeb extends Module {
         int lead = Math.max(0, predictTicks.getValue());
         for (PlayerEntity target : targets) {
             BlockPos actualFeet = target.getBlockPos();
-            BlockPos predictedFeet = predictTargetFeet(target, lead);
-            BlockPos midFeet = lead >= 2 ? predictTargetFeet(target, Math.max(1, lead / 2)) : predictedFeet;
+            TargetKinematics kin = estimateKinematics(target);
+            float speedFactor = (float) MathHelper.clamp((kin.horizontalSpeed() - 0.18) / 0.25, 0.0, 2.5);
+            BlockPos predictedFeet = predictTargetFeet(target, lead, kin, speedFactor);
+            BlockPos midFeet = lead >= 1
+                    ? predictTargetFeet(target, Math.max(0.5, lead * 0.55), kin, speedFactor * 0.6F)
+                    : predictedFeet;
 
             // If target's feet are already webbed and Double Web is enabled, place head web directly on top
             if (doubleWeb.getValue() && isCobweb(actualFeet) && !isCobweb(actualFeet.up())) {
                 PlacementTarget headPlacement = tryBuildWebPlacement(actualFeet.up(), eye, maxRangeSq);
                 if (headPlacement != null) {
+                    activeTargetSpeedFactor = speedFactor;
                     return headPlacement;
                 }
             }
 
             PlacementTarget feetPlacement = tryBuildWebPlacement(predictedFeet, eye, maxRangeSq);
             if (feetPlacement != null) {
+                activeTargetSpeedFactor = speedFactor;
+                if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("AutoWeb.PredictedTarget");
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("aw:pred", 200L, "AutoWeb", "PREDICT",
+                            String.format("target=%s hSpeed=%.3f sf=%.2f actual=%s pred=%s",
+                                    target.getName().getString(), kin.horizontalSpeed(), speedFactor,
+                                    actualFeet.toShortString(), predictedFeet.toShortString()));
+                }
                 return feetPlacement;
             }
             if (!midFeet.equals(predictedFeet) && !midFeet.equals(actualFeet)) {
                 PlacementTarget midPlacement = tryBuildWebPlacement(midFeet, eye, maxRangeSq);
                 if (midPlacement != null) {
+                    activeTargetSpeedFactor = speedFactor;
                     return midPlacement;
                 }
             }
             if (!predictedFeet.equals(actualFeet)) {
                 PlacementTarget actualFeetPlacement = tryBuildWebPlacement(actualFeet, eye, maxRangeSq);
                 if (actualFeetPlacement != null) {
+                    activeTargetSpeedFactor = speedFactor;
                     return actualFeetPlacement;
                 }
             }
             if (doubleWeb.getValue() && isCobweb(predictedFeet) && !isCobweb(predictedFeet.up())) {
                 PlacementTarget headPlacement = tryBuildWebPlacement(predictedFeet.up(), eye, maxRangeSq);
                 if (headPlacement != null) {
+                    activeTargetSpeedFactor = speedFactor;
                     return headPlacement;
                 }
             }
         }
+        activeTargetSpeedFactor = 0.0F;
         return null;
     }
 
@@ -785,16 +804,23 @@ public class AutoWeb extends Module {
         return target;
     }
 
-    private BlockPos predictTargetFeet(PlayerEntity target, int leadTicks) {
-        if (leadTicks <= 0) {
+    private BlockPos predictTargetFeet(PlayerEntity target, double baseLeadTicks, TargetKinematics kin, float speedFactor) {
+        if (baseLeadTicks <= 0.0 && kin.horizontalSpeed() < 0.08) {
             return target.getBlockPos();
         }
-        Vec3d velocity = estimateTargetVelocity(target);
-        double latencyLead = Math.min(2.5, LatencyTracker.milliseconds() / 100.0);
+        Vec3d velocity = kin.velocity();
+        Vec3d accel = kin.acceleration();
+        double latencyLead = Math.min(3.0, LatencyTracker.milliseconds() / 85.0);
         double swapLead = isLegitSwap() && !client.player.getMainHandStack().isOf(Items.COBWEB)
-                ? Math.max(0, swapDelay.getValue()) * 0.5
+                ? Math.max(0, swapDelay.getValue())
                 : 0.0;
-        double totalLead = Math.min(8.0, leadTicks + latencyLead + swapLead);
+        double dynamicBase = baseLeadTicks > 0.0
+                ? baseLeadTicks * (1.0 + speedFactor * 0.55)
+                : speedFactor * 1.2;
+        double totalLead = Math.min(10.0, dynamicBase + latencyLead + swapLead);
+        if (totalLead <= 0.05) {
+            return target.getBlockPos();
+        }
         int steps = Math.max(1, MathHelper.ceil(totalLead));
         double stepScale = totalLead / steps;
 
@@ -805,12 +831,22 @@ public class AutoWeb extends Module {
         double vy = velocity.y;
         double vz = velocity.z;
         boolean onGround = target.isOnGround();
+        double accelAlongVel = vx * accel.x + vz * accel.z;
+        boolean braking = accelAlongVel < -0.008;
 
         for (int i = 0; i < steps; i++) {
+            if (!braking && i < 2) {
+                vx = MathHelper.clamp(vx + accel.x * 0.45 * stepScale, -1.6, 1.6);
+                vz = MathHelper.clamp(vz + accel.z * 0.45 * stepScale, -1.6, 1.6);
+            }
             double nextX = x + vx * stepScale;
             double nextZ = z + vz * stepScale;
-            BlockPos horizCheck = BlockPos.ofFloored(nextX, y + 0.1, nextZ);
-            if (client.world.getBlockState(horizCheck).isReplaceable()) {
+            BlockPos bodyCheck = BlockPos.ofFloored(nextX, y + 0.65, nextZ);
+            if (client.world.getBlockState(bodyCheck).isReplaceable()) {
+                BlockPos footCheck = BlockPos.ofFloored(nextX, y + 0.08, nextZ);
+                if (!client.world.getBlockState(footCheck).isReplaceable() && onGround) {
+                    y = Math.max(y, footCheck.getY() + 0.5);
+                }
                 x = nextX;
                 z = nextZ;
             } else {
@@ -833,14 +869,15 @@ public class AutoWeb extends Module {
                 }
             }
 
-            double drag = onGround ? 0.94 : 0.91;
+            // Preserve momentum when sprinting/accelerating; only apply strong drag if actively braking
+            double drag = braking ? 0.88 : (onGround ? 0.99 : 0.985);
             vx *= Math.pow(drag, stepScale);
             vz *= Math.pow(drag, stepScale);
         }
 
         // If still airborne near the ground while falling/ending a jump, snap down to the landing cell
         BlockPos predicted = BlockPos.ofFloored(x, y + 0.05, z);
-        if (!onGround && vy <= 0.15) {
+        if (!onGround && vy <= 0.18) {
             for (int drop = 0; drop <= 2; drop++) {
                 BlockPos candidate = predicted.down(drop);
                 BlockState candidateState = client.world.getBlockState(candidate);
@@ -860,46 +897,65 @@ public class AutoWeb extends Module {
         return target.getBlockPos();
     }
 
-    private Vec3d estimateTargetVelocity(PlayerEntity target) {
+    private TargetKinematics estimateKinematics(PlayerEntity target) {
+        Vec3d vFast = null;
+        Vec3d vPrev = null;
         List<PositionSample> history = EntityPositionTracker.positions(target);
         if (history != null && history.size() >= 2) {
             PositionSample newest = history.get(history.size() - 1);
             int currentTick = EntityPositionTracker.currentTick();
             if (currentTick - newest.tick() <= 4) {
-                // Find an earlier sample 2..5 ticks back to smooth out 3-tick server entity interpolation
-                PositionSample earlier = null;
+                PositionSample fastAnchor = history.get(history.size() - 2);
+                int fastDt = Math.max(1, newest.tick() - fastAnchor.tick());
+                Vec3d fastDelta = newest.position().subtract(fastAnchor.position());
+                if (fastDelta.lengthSquared() / (fastDt * fastDt) <= 6.25) {
+                    vFast = fastDelta.multiply(1.0 / fastDt);
+                }
+
+                PositionSample prevAnchor = null;
                 for (int i = history.size() - 2; i >= 0; i--) {
                     PositionSample sample = history.get(i);
                     int dt = newest.tick() - sample.tick();
-                    if (dt >= 2 && dt <= 6) {
-                        earlier = sample;
+                    if (dt >= 2 && dt <= 5) {
+                        prevAnchor = sample;
                         if (dt >= 3) {
                             break;
                         }
-                    } else if (dt > 6) {
+                    } else if (dt > 5) {
                         break;
                     }
                 }
-                if (earlier == null) {
-                    earlier = history.get(history.size() - 2);
-                }
-                int dt = Math.max(1, newest.tick() - earlier.tick());
-                Vec3d delta = newest.position().subtract(earlier.position());
-                double perTickSq = delta.lengthSquared() / (dt * dt);
-                // Ignore teleport spikes (> 2.5 blocks/tick)
-                if (perTickSq <= 6.25) {
-                    return delta.multiply(1.0 / dt);
+                if (prevAnchor != null && prevAnchor != fastAnchor) {
+                    int prevDt = Math.max(1, fastAnchor.tick() - prevAnchor.tick());
+                    Vec3d prevDelta = fastAnchor.position().subtract(prevAnchor.position());
+                    if (prevDelta.lengthSquared() / (prevDt * prevDt) <= 6.25) {
+                        vPrev = prevDelta.multiply(1.0 / prevDt);
+                    }
                 }
             }
         }
-        double dx = target.getX() - target.lastX;
-        double dy = target.getY() - target.lastY;
-        double dz = target.getZ() - target.lastZ;
-        if (dx * dx + dy * dy + dz * dz > 1.0E-5) {
-            return new Vec3d(dx, dy, dz);
+
+        if (vFast == null) {
+            double dx = target.getX() - target.lastX;
+            double dy = target.getY() - target.lastY;
+            double dz = target.getZ() - target.lastZ;
+            vFast = (dx * dx + dy * dy + dz * dz > 1.0E-5) ? new Vec3d(dx, dy, dz) : target.getVelocity();
         }
-        return target.getVelocity();
+
+        Vec3d velocity = vFast;
+        Vec3d accel = Vec3d.ZERO;
+        if (vPrev != null) {
+            double fastSpeed = Math.hypot(vFast.x, vFast.z);
+            double fastWeight = fastSpeed >= 0.30 ? 0.85 : 0.70;
+            velocity = vFast.multiply(fastWeight).add(vPrev.multiply(1.0 - fastWeight));
+            double ax = MathHelper.clamp(vFast.x - vPrev.x, -0.18, 0.18);
+            double az = MathHelper.clamp(vFast.z - vPrev.z, -0.18, 0.18);
+            accel = new Vec3d(ax, 0.0, az);
+        }
+        return new TargetKinematics(velocity, accel, Math.hypot(velocity.x, velocity.z));
     }
+
+    private record TargetKinematics(Vec3d velocity, Vec3d acceleration, double horizontalSpeed) {}
 
     private boolean isValidWebTarget(PlayerEntity player, Vec3d eye, double maxRangeSq, float maxFov) {
         if (player == null || player == client.player || !player.isAlive() || player.isRemoved()

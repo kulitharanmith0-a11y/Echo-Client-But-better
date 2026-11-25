@@ -17,6 +17,10 @@ import com.blamejared.clumps.client.handlers.input.InputSimulator;
 import com.blamejared.clumps.client.mixin.accessor.ClientPlayerInteractionManagerAccessor;
 import com.blamejared.clumps.client.mixin.accessor.MinecraftClientAccessor;
 import com.blamejared.clumps.client.modules.Module;
+import com.blamejared.clumps.client.modules.impl.combat.AutoMaceSwap;
+import com.blamejared.clumps.client.modules.impl.combat.BreachSwap;
+import com.blamejared.clumps.client.modules.impl.combat.MaceSwap;
+import com.blamejared.clumps.client.modules.impl.combat.ShieldBreaker;
 import com.blamejared.clumps.client.modules.impl.internals.Prevent;
 import com.blamejared.clumps.client.modules.impl.utility.AutoTotem;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
@@ -839,6 +843,9 @@ public final class ActionCoordinator extends ClientHandler {
 
         if (CLIENT.player.getInventory().getSelectedSlot() == slot) {
             recordSlotChangeSuccess(owner);
+            if (syntheticAttackPending && isAttackModifierSwapper(owner)) {
+                adoptSyntheticAttackOwner(owner);
+            }
             InputSimulator simulator = InputSimulator.get();
             if (simulator != null) {
                 simulator.simulateHotbarSelect(owner, previousSlot, slot);
@@ -918,6 +925,19 @@ public final class ActionCoordinator extends ClientHandler {
     // -------------------------------------------------------------------------
     // Keybinding-driven Module Request Helpers
     // -------------------------------------------------------------------------
+
+    public void adoptSyntheticAttackOwner(Module newOwner) {
+        if (newOwner != null && syntheticAttackPending) {
+            syntheticAttackClaimOwner = newOwner;
+        }
+    }
+
+    private static boolean isAttackModifierSwapper(Module owner) {
+        return owner instanceof ShieldBreaker
+                || owner instanceof BreachSwap
+                || owner instanceof MaceSwap
+                || owner instanceof AutoMaceSwap;
+    }
 
     public boolean requestAttackClick(Module owner, AttackKeyEvent event) {
         if (event == null || event.cancelled) {
@@ -1730,7 +1750,50 @@ public final class ActionCoordinator extends ClientHandler {
 
     private ActionResultInfo finish(ActionResultInfo result) {
         lastResult = result;
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED && result != null && !result.succeeded()) {
+            String codeName = denyCodeName(result.code());
+            String ownerName = activeOwner != null ? activeOwner.getName().toString()
+                    : (syntheticAttackClaimOwner != null ? syntheticAttackClaimOwner.getName().toString() : "none");
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ActionCoord." + result.status() + "." + codeName);
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited(
+                    "ac:" + result.type() + ":" + result.code() + ":" + ownerName,
+                    120L,
+                    "ActionCoord",
+                    result.status().name(),
+                    "type=" + result.type() + " code=" + codeName + " owner=" + ownerName
+                            + " inTick=" + inTick + " atk=" + attackSentInTick + " pendingSlot=" + pendingSlot);
+        }
         return result;
+    }
+
+    private static String denyCodeName(int code) {
+        return switch (code) {
+            case OK -> "OK";
+            case DENY_WORLD -> "DENY_WORLD";
+            case DENY_PLAYER -> "DENY_PLAYER";
+            case DENY_SCREEN -> "DENY_SCREEN";
+            case DENY_TARGET -> "DENY_TARGET";
+            case DENY_ACTIVE_CONFLICT -> "DENY_ACTIVE_CONFLICT";
+            case DENY_TRANSFER_ACTIVE -> "DENY_TRANSFER_ACTIVE";
+            case DENY_TICK_CONFLICT -> "DENY_TICK_CONFLICT";
+            case DENY_TICK_WINDOW -> "DENY_TICK_WINDOW";
+            case DENY_SLOT_PENDING -> "DENY_SLOT_PENDING";
+            case DENY_SETBACK -> "DENY_SETBACK";
+            case DENY_USING_ITEM -> "DENY_USING_ITEM";
+            case DENY_BREAKING_BLOCK -> "DENY_BREAKING_BLOCK";
+            case DENY_INVENTORY_TICK -> "DENY_INVENTORY_TICK";
+            case DENY_SLOT_CONFLICT -> "DENY_SLOT_CONFLICT";
+            case DENY_HOTBAR_OWNER -> "DENY_HOTBAR_OWNER";
+            case DENY_INVALID_ARG -> "DENY_INVALID_ARG";
+            case DENY_COOLDOWN -> "DENY_COOLDOWN";
+            case DENY_DUPLICATE -> "DENY_DUPLICATE";
+            case DENY_POST_ATTACK_SWITCH -> "DENY_POST_ATTACK_SWITCH";
+            case DENY_PROTECTED_SLOT -> "DENY_PROTECTED_SLOT";
+            case DENY_MIDTICK -> "DENY_MIDTICK";
+            case DENY_EMPTY_SLOT -> "DENY_EMPTY_SLOT";
+            case REJECT_NOT_APPLIED -> "REJECT_NOT_APPLIED";
+            default -> "CODE_" + code;
+        };
     }
 
     private boolean hasValidPlayerAndWorld() {

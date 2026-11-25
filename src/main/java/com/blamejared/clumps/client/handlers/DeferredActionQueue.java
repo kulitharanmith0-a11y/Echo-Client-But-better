@@ -197,18 +197,44 @@ public final class DeferredActionQueue extends ClientHandler {
         while (!actions.isEmpty()) {
             DeferredFeatureAction action = actions.peek();
             if (!action.isDue(CLIENT.player.age, phase)) break;
-            if (action.restoreAll && CLIENT.player.getInventory().getSelectedSlot() != action.baselineSlot) {
-                if (switchingBlocked || CLIENT.player.isUsingItem()
-                        || (coordinator != null && (!coordinator.canSwapSlotNow() || coordinator.isSlotPending()))) {
+            boolean maySwapSlot = action.restoreAll || action.callback != null;
+            if (maySwapSlot) {
+                boolean needsSlotSwitch = !action.restoreAll
+                        || CLIENT.player.getInventory().getSelectedSlot() != action.baselineSlot;
+                if (needsSlotSwitch && (switchingBlocked || CLIENT.player.isUsingItem()
+                        || (coordinator != null && (!coordinator.canSwapSlotNow() || coordinator.isSlotPending())))) {
+                    if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                        com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited(
+                                "daq:wait:" + action.owner.getName(), 150L, "SlotQueue", "RESTORE_WAIT",
+                                "owner=" + action.owner.getName() + " blocked=" + switchingBlocked
+                                        + " using=" + CLIENT.player.isUsingItem() + " phase=" + phase);
+                    }
                     break;
                 }
             }
-            actions.pop();
             if (action.restoreAll) {
-                restoreAndDrain(action);
+                DeferredFeatureAction baseline = actions.peekLast();
+                if (baseline == null) baseline = action;
+                if (CLIENT.player.getInventory().getSelectedSlot() != baseline.baselineSlot
+                        && !setHotbarSlot(baseline.owner, baseline.baselineSlot, true)) {
+                    if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                        com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("SlotQueue.RestoreRetry");
+                        com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("SlotQueue", "RESTORE_RETRY",
+                                "owner=" + baseline.owner.getName() + " targetSlot=" + baseline.baselineSlot);
+                    }
+                    break;
+                }
+                actions.pop();
+                if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("SlotQueue.RestoreOk");
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("SlotQueue", "RESTORE_OK",
+                            "owner=" + baseline.owner.getName() + " slot=" + baseline.baselineSlot);
+                }
+                while (!actions.isEmpty()) runCallback(actions.pop());
                 runCallback(action);
                 return;
             }
+            actions.pop();
             finishAction(action, false, false);
         }
     }

@@ -36,7 +36,7 @@ public class CartRefill extends Module {
     private static final CharSequence CART_ANY = CatalogText.literal("Any Minecart");
 
     private static final CharSequence TRIGGER_NO_CART = CatalogText.literal("No Cart In Hotbar");
-    private static final CharSequence TRIGGER_FILL_SLOTS = CatalogText.literal("Fill Empty Slots");
+    private static final CharSequence TRIGGER_FILL_SLOTS = CatalogText.literal("Fill Selected Slots");
 
     private static final CharSequence PICK_CLOSEST = CatalogText.literal("Closest");
     private static final CharSequence PICK_RANDOM = CatalogText.literal("Random");
@@ -92,13 +92,13 @@ public class CartRefill extends Module {
 
         mode.description(CatalogText.literal("Auto Open opens your inventory to refill; In Inventory only refills while your inventory is open; Silent swaps without opening"));
         cartType.description(CatalogText.literal("Choose whether to refill only TNT Minecarts or any minecart type"));
-        trigger.description(CatalogText.literal("No Cart In Hotbar waits until zero carts remain in your hotbar; Fill Empty Slots refills every selected slot"));
-        hotbarSlots.description(CatalogText.literal("Target hotbar slots to refill carts into (leave all unchecked to allow any empty hotbar slot)"));
+        trigger.description(CatalogText.literal("No Cart In Hotbar waits until zero carts remain in your selected slots; Fill Selected Slots keeps every selected slot stocked"));
+        hotbarSlots.description(CatalogText.literal("Target hotbar slots to refill carts into (replaces blocks/items in selected slots unless Only Empty Slot is on)"));
         pickOrder.description(CatalogText.literal("Closest picks the inventory cart nearest to your target hotbar column; Random picks a random cart; First scans top-left to bottom-right"));
         delay.description(CatalogText.literal("Randomized delay in milliseconds before moving a cart"));
         autoClose.description(CatalogText.literal("Automatically close the inventory after refilling in Auto Open mode"));
         closeDelay.description(CatalogText.literal("Delay in milliseconds before closing the inventory"));
-        onlyEmptySlot.description(CatalogText.literal("Skip selected hotbar slots that currently hold a different item"));
+        onlyEmptySlot.description(CatalogText.literal("Skip selected hotbar slots that currently hold a block or other item"));
         pauseOnUse.description(CatalogText.literal("Pause auto-refill while eating, drinking, blocking, or using an item"));
 
         cartType.tooltip(SECTION_INVENTORY);
@@ -239,10 +239,10 @@ public class CartRefill extends Module {
     }
 
     private int findDestinationHotbarSlot() {
-        if (trigger.isSelected(TRIGGER_NO_CART) && hotbarHasAnyCart()) {
+        boolean anySelected = hasAnySelectedHotbarSlot();
+        if (trigger.isSelected(TRIGGER_NO_CART) && eligibleSlotsHaveAnyCart(anySelected)) {
             return -1;
         }
-        boolean anySelected = hasAnySelectedHotbarSlot();
         int currentSelected = client.player.getInventory().getSelectedSlot();
 
         // First pass: prefer an empty allowed slot (prioritizing current slot if eligible)
@@ -258,12 +258,16 @@ public class CartRefill extends Module {
                 return slot;
             }
         }
-        if (onlyEmptySlot.getValue()) {
+        if (onlyEmptySlot.getValue() || !anySelected) {
             return -1;
         }
-        // Second pass (when Only Empty Slot is disabled): replace a non-cart item in selected slots
+        // Second pass: replace any block/non-cart item inside explicitly selected slots
+        if (isHotbarSlotEligible(currentSelected, true)
+                && !isTargetCart(client.player.getInventory().getStack(currentSelected))) {
+            return currentSelected;
+        }
         for (int slot = 0; slot < 9; slot++) {
-            if (!isHotbarSlotEligible(slot, anySelected)) {
+            if (!isHotbarSlotEligible(slot, true)) {
                 continue;
             }
             if (!isTargetCart(client.player.getInventory().getStack(slot))) {
@@ -333,8 +337,11 @@ public class CartRefill extends Module {
         return true;
     }
 
-    private boolean hotbarHasAnyCart() {
+    private boolean eligibleSlotsHaveAnyCart(boolean anySelected) {
         for (int slot = 0; slot < 9; slot++) {
+            if (!isHotbarSlotEligible(slot, anySelected)) {
+                continue;
+            }
             if (isTargetCart(client.player.getInventory().getStack(slot))) {
                 return true;
             }

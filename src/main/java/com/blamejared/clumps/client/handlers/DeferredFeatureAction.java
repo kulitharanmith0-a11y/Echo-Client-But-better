@@ -22,6 +22,7 @@ final class DeferredFeatureAction {
     }
 
     boolean isDue(long tick, ActionPhase currentPhase) {
-        return expiresAtTick != Long.MAX_VALUE && tick >= expiresAtTick && currentPhase.ordinal() >= phase.ordinal();
+        return expiresAtTick != Long.MAX_VALUE
+                && (tick > expiresAtTick || (tick == expiresAtTick && currentPhase.ordinal() >= phase.ordinal()));
     }
 }

@@ -143,9 +143,11 @@ configurations.named('compileClasspath') {
             objects.named(LibraryElements, LibraryElements.JAR))
 }
 
+def devDiagnosticsEnabled = providers.gradleProperty('devDiagnostics').orElse('false').get().toBoolean()
+
 sourceSets {
     main {
-        java.setSrcDirs(['src/main/java'])
+        java.setSrcDirs(devDiagnosticsEnabled ? ['src/main/java', 'src/dev/java'] : ['src/main/java', 'src/prod/java'])
         resources.setSrcDirs(['src/main/resources'])
     }
 }

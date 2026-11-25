@@ -108,17 +108,7 @@ public class Scaffold extends Module {
 
     @Override
     public void onEnable() {
-        try {
-            Class.forName(ScaffoldController.class.getName(), true, ScaffoldController.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         ScaffoldController controller = scaffoldController;
-        try {
-            Class.forName(ScaffoldController.class.getName(), true, ScaffoldController.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         controller.reset();
         super.onEnable();
     }
@@ -126,17 +116,7 @@ public class Scaffold extends Module {
     @Override
     public void onDisable() {
         DeferredActionQueue.finish(this, false);
-        try {
-            Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         RotationManager rotations = rotations();
-        try {
-            Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         rotations.release(this);
         super.onDisable();
     }

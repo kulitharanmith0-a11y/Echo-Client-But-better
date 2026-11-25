@@ -1,6 +1,8 @@
 package com.blamejared.clumps.client.event;
 
 import com.blamejared.clumps.client.ClumpsClient;
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
+import com.blamejared.clumps.client.modules.Module;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -21,6 +23,9 @@ public final class EventBus {
             subscribersByPriority = new LinkedHashMap<>();
     private static final Map<Object, Boolean> registeredOwners = new ConcurrentHashMap<>();
     private static final Map<Class<?>, MethodHandle[]> dispatchCache = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, String[]> dispatchOwners = DevDiagnostics.ENABLED ? new ConcurrentHashMap<>() : null;
+    private static final Map<Class<?>, String[]> dispatchMethods = DevDiagnostics.ENABLED ? new ConcurrentHashMap<>() : null;
+    private static final Map<MethodHandle, String> handleMethodNames = DevDiagnostics.ENABLED ? new ConcurrentHashMap<>() : null;
     private static final Map<Class<?>, ConcurrentHashMap<Object, Consumer<Event>>>
             functionalSubscribers = new ConcurrentHashMap<>();
 
@@ -44,6 +49,9 @@ public final class EventBus {
                     subscriber = lookup.unreflect(method).bindTo(owner).asType(subscriberType);
                 } catch (IllegalAccessException failure) {
                     continue;
+                }
+                if (DevDiagnostics.ENABLED) {
+                    handleMethodNames.put(subscriber, method.getName());
                 }
                 EventPriority priority = method.getAnnotation(Subscribe.class).priority();
                 Map<Object, MethodHandle[]> owners = subscribersByPriority
@@ -84,20 +92,49 @@ public final class EventBus {
         var priorities = subscribersByPriority.get(eventType);
         if (priorities == null) {
             dispatchCache.remove(eventType);
+            if (DevDiagnostics.ENABLED) {
+                dispatchOwners.remove(eventType);
+                dispatchMethods.remove(eventType);
+            }
             return;
         }
         ArrayList<MethodHandle> subscribers = new ArrayList<>();
+        ArrayList<String> ownersList = DevDiagnostics.ENABLED ? new ArrayList<>() : null;
+        ArrayList<String> methodsList = DevDiagnostics.ENABLED ? new ArrayList<>() : null;
         for (var owners : priorities.values()) {
-            for (MethodHandle[] methods : owners.values()) {
-                for (MethodHandle method : methods) {
+            for (var ownerEntry : owners.entrySet()) {
+                Object owner = ownerEntry.getKey();
+                String ownerName = null;
+                if (DevDiagnostics.ENABLED) {
+                    if (owner instanceof DevDiagnostics) {
+                        ownerName = "";
+                    } else if (owner instanceof Module module) {
+                        ownerName = module.getName().toString();
+                    } else {
+                        ownerName = owner.getClass().getSimpleName();
+                    }
+                }
+                for (MethodHandle method : ownerEntry.getValue()) {
                     subscribers.add(method);
+                    if (DevDiagnostics.ENABLED) {
+                        ownersList.add(ownerName);
+                        methodsList.add(handleMethodNames.getOrDefault(method, "?"));
+                    }
                 }
             }
         }
         if (subscribers.isEmpty()) {
             dispatchCache.remove(eventType);
+            if (DevDiagnostics.ENABLED) {
+                dispatchOwners.remove(eventType);
+                dispatchMethods.remove(eventType);
+            }
         } else {
             dispatchCache.put(eventType, subscribers.toArray(emptySubscribers));
+            if (DevDiagnostics.ENABLED) {
+                dispatchOwners.put(eventType, ownersList.toArray(new String[0]));
+                dispatchMethods.put(eventType, methodsList.toArray(new String[0]));
+            }
         }
     }
 
@@ -126,19 +163,57 @@ public final class EventBus {
         if (ClumpsClient.eventsDisabled) {
             return false;
         }
-        MethodHandle[] methods = dispatchCache.get(event.getClass());
+        Class<?> eventClass = event.getClass();
+        MethodHandle[] methods = dispatchCache.get(eventClass);
         if (methods != null) {
-            for (MethodHandle method : methods) {
-                try {
-                    method.invokeExact(event);
-                } catch (Throwable ignored) {
+            if (DevDiagnostics.ENABLED) {
+                String[] owners = dispatchOwners.get(eventClass);
+                String[] names = dispatchMethods.get(eventClass);
+                String eventName = eventClass.getSimpleName();
+                for (int i = 0; i < methods.length; i++) {
+                    String owner = (owners != null && i < owners.length) ? owners[i] : "";
+                    boolean track = owner != null && !owner.isEmpty();
+                    boolean wasCancelled = event.cancelled;
+                    long start = track ? System.nanoTime() : 0L;
+                    try {
+                        methods[i].invokeExact(event);
+                    } catch (Throwable err) {
+                        if (track) {
+                            String mName = (names != null && i < names.length) ? names[i] : "?";
+                            DevDiagnostics.recordCrash(owner, eventName, mName, err);
+                        }
+                    }
+                    if (track) {
+                        DevDiagnostics.recordEventDispatch(owner, eventName, System.nanoTime() - start, !wasCancelled && event.cancelled);
+                    }
+                }
+            } else {
+                for (MethodHandle method : methods) {
+                    try {
+                        method.invokeExact(event);
+                    } catch (Throwable ignored) {
+                    }
                 }
             }
         }
-        var callbacks = functionalSubscribers.get(event.getClass());
+        var callbacks = functionalSubscribers.get(eventClass);
         if (callbacks != null) {
-            for (Consumer<Event> callback : callbacks.values()) {
-                callback.accept(event);
+            for (var entry : callbacks.entrySet()) {
+                if (DevDiagnostics.ENABLED) {
+                    Object ownerObj = entry.getKey();
+                    String owner = ownerObj instanceof Module m ? m.getName().toString()
+                            : (ownerObj != null ? ownerObj.getClass().getSimpleName() : "Callback");
+                    boolean wasCancelled = event.cancelled;
+                    long start = System.nanoTime();
+                    try {
+                        entry.getValue().accept(event);
+                    } catch (Throwable err) {
+                        DevDiagnostics.recordCrash(owner, eventClass.getSimpleName(), "callback", err);
+                    }
+                    DevDiagnostics.recordEventDispatch(owner, eventClass.getSimpleName(), System.nanoTime() - start, !wasCancelled && event.cancelled);
+                } else {
+                    entry.getValue().accept(event);
+                }
             }
         }
         return event.cancelled;
@@ -148,6 +223,11 @@ public final class EventBus {
         synchronized (EventBus.class) {
             subscribersByPriority.clear();
             dispatchCache.clear();
+            if (DevDiagnostics.ENABLED) {
+                dispatchOwners.clear();
+                dispatchMethods.clear();
+                handleMethodNames.clear();
+            }
         }
         registeredOwners.clear();
         functionalSubscribers.clear();

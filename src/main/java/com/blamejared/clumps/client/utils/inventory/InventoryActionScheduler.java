@@ -2,6 +2,7 @@ package com.blamejared.clumps.client.utils.inventory;
 
 import static com.blamejared.clumps.client.MinecraftAccess.CLIENT;
 
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.PlayerInputEvent;
@@ -315,7 +316,18 @@ public final class InventoryActionScheduler {
         } finally {
             transferring = false;
         }
-        if (!succeeded) { return false; }
+        if (!succeeded) {
+            if (DevDiagnostics.ENABLED) {
+                String mod = owner != null ? owner.getName().toString() : "InvScheduler";
+                DevDiagnostics.recordDeny(mod, "INV", "src=" + source + " dst=" + target + " item=" + item);
+            }
+            return false;
+        }
+        if (DevDiagnostics.ENABLED) {
+            String mod = owner != null ? owner.getName().toString() : "InvScheduler";
+            DevDiagnostics.metric("inv.transfer_ok." + mod);
+            DevDiagnostics.log(mod, "INV_TRANSFER_OK", "src=" + source + " dst=" + target + " item=" + item + " mode=" + openMode.getValue());
+        }
         transferCallback.accept(target, item);
         transferTimer.reset();
         nextTransferDelay = sampleTransferDelay();

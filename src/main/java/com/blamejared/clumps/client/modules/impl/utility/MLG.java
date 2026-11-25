@@ -283,11 +283,6 @@ public class MLG extends Module {
     }
 
     private static Screen currentScreen() {
-        try {
-            Class.forName(Screen.class.getName(), true, Screen.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         return MinecraftClient.getInstance().currentScreen;
     }
 

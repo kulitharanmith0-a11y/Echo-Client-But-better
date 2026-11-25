@@ -1,6 +1,7 @@
 package com.blamejared.clumps.client.handlers.input;
 
 import com.blamejared.clumps.client.ClumpsClient;
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.PlayerInputEvent;
@@ -158,6 +159,11 @@ public final class InputSimulator extends ClientHandler {
         }
         ResolvedInput resolved = resolveAttack(owner);
         if (resolved != null) {
+            if (DevDiagnostics.ENABLED) {
+                String mod = owner != null ? owner.getName().toString() : "InputSim";
+                DevDiagnostics.metric("inputsim.attack_tap." + mod);
+                DevDiagnostics.logRateLimited("isim-atk:" + mod, 250L, mod, "INPUT_SIM_ATK", "key=" + resolved.key());
+            }
             tap(resolved, true);
         }
     }
@@ -171,6 +177,11 @@ public final class InputSimulator extends ClientHandler {
         }
         ResolvedInput resolved = resolveUse(owner);
         if (resolved != null) {
+            if (DevDiagnostics.ENABLED) {
+                String mod = owner != null ? owner.getName().toString() : "InputSim";
+                DevDiagnostics.metric("inputsim.use_tap." + mod);
+                DevDiagnostics.logRateLimited("isim-use:" + mod, 250L, mod, "INPUT_SIM_USE", "key=" + resolved.key());
+            }
             tap(resolved, true);
         }
     }

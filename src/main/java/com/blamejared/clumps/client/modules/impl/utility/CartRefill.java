@@ -327,11 +327,20 @@ public class CartRefill extends Module {
         }
         InputSimulator simulator = InputSimulator.get();
         if (simulator != null && simulator.scheduleCursorClick(this, syncId, sourceSlot, hotbarSlot, SlotActionType.SWAP, null)) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("CartRefill.swap_cursor");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("Cart Refill", "SWAP_CURSOR", "src=" + sourceSlot + " dst=" + hotbarSlot);
+            }
             return true;
         }
         ActionCoordinator coordinator = ActionCoordinator.get();
         if (coordinator != null) {
-            return coordinator.executeSlotClick(this, syncId, sourceSlot, hotbarSlot, SlotActionType.SWAP, client.player).succeeded();
+            boolean ok = coordinator.executeSlotClick(this, syncId, sourceSlot, hotbarSlot, SlotActionType.SWAP, client.player).succeeded();
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED && ok) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("CartRefill.swap_ok");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("Cart Refill", "SWAP_OK", "src=" + sourceSlot + " dst=" + hotbarSlot);
+            }
+            return ok;
         }
         client.interactionManager.clickSlot(syncId, sourceSlot, hotbarSlot, SlotActionType.SWAP, client.player);
         return true;

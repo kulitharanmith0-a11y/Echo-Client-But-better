@@ -156,11 +156,6 @@ public class MaceSwap extends Module {
     }
 
     private static void initializeLivingEntityClass() {
-        try {
-            Class.forName(LivingEntity.class.getName(), true, LivingEntity.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     @Subscribe

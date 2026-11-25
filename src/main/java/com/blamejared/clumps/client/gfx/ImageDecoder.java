@@ -69,10 +69,5 @@ public final class ImageDecoder {
 
     
     private static void initializeFontDefinitions() {
-        try {
-            Class.forName(FontAsset.class.getName(), true, FontAsset.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 }

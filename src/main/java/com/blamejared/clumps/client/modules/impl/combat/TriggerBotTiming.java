@@ -64,19 +64,23 @@ public final class TriggerBotTiming {
         if (policy == CritPolicy.NONE || !inCritRange) {
             return true;
         }
-        if (critOnlyOnSpace) {
-            if (jumpPressed && onGround) {
-                return false;
-            }
-            if (!jumpPressed && !onGround) {
-                return true;
-            }
+        // Never waste attack cooldown on a ground swing on the exact tick the player jumps to crit.
+        if (jumpPressed && onGround) {
+            return false;
+        }
+        if (critOnlyOnSpace && !jumpPressed && !onGround) {
+            return true;
         }
         if (policy == CritPolicy.PRECISE) {
             return (inCriticalFallState && !sprinting) || allowsNonCriticalFallback;
         }
         if (policy == CritPolicy.NORMAL) {
-            return inCriticalFallState || allowsNonCriticalFallback;
+            // In vanilla Minecraft, sprinting cancels critical hits completely.
+            // While airborne in crit range, wait for falling + !sprinting; allow normal ground trades when not jumping.
+            if (inCriticalFallState) {
+                return !sprinting;
+            }
+            return allowsNonCriticalFallback;
         }
         return true;
     }

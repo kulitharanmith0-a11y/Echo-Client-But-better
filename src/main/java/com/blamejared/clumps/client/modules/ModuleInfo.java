@@ -4,11 +4,6 @@ import com.blamejared.clumps.client.keyboard.InputKey;
 
 public record ModuleInfo(CharSequence name, CharSequence description, ModuleCategory moduleCategory, InputKey key, boolean visible) {
     public ModuleInfo {
-        try {
-            Class.forName(com.blamejared.clumps.client.modules.Module.class.getName(), true, com.blamejared.clumps.client.modules.Module.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         name = name == null ? "" : name;
         description = description == null ? "" : description;
         moduleCategory = moduleCategory == null ? ModuleCategory.INTERNALS : moduleCategory;

@@ -46,12 +46,6 @@ public abstract class GuiRendererMixin implements Platform.GuiLoop {
     
     @Unique
     private static boolean clumps$shouldDeferHud() {
-        try {
-            Class.forName(RotationPriority.class.getName(), true, RotationPriority.class.getClassLoader());
-            Class.forName(Screen.class.getName(), true, Screen.class.getClassLoader());
-        } catch (ClassNotFoundException missingResolvedClass) {
-            throw new IllegalStateException("Resolved class initialization failed", missingResolvedClass);
-        }
         Screen screen = MinecraftRenderState.getScreen();
         if (screen instanceof ClientScreen) {
             return true;

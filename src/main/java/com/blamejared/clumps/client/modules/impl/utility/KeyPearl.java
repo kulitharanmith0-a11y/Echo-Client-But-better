@@ -74,11 +74,6 @@ public class KeyPearl extends Module {
         if (isOutsideWorld()) {
             return;
         }
-        try {
-            Class.forName(Screen.class.getName(), true, Screen.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         if (MinecraftClient.getInstance().currentScreen != null) {
             return;
         }
@@ -152,11 +147,6 @@ public class KeyPearl extends Module {
     }
 
     private static void useSelectedItem() {
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         var coordinator = com.blamejared.clumps.client.handlers.action.ActionCoordinator.get();
         if (coordinator != null) {
             coordinator.executeDoItemUse(null);

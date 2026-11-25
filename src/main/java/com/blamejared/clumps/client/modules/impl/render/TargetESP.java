@@ -31,17 +31,7 @@ public class TargetESP extends Module {
     @Override
     public void onDisable() {
         super.onDisable();
-        try {
-            Class.forName(TargetMotionTrail.class.getName(), true, TargetMotionTrail.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         TargetMotionTrail currentTrail = trail;
-        try {
-            Class.forName(TargetMotionTrail.class.getName(), true, TargetMotionTrail.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         currentTrail.clearHistory();
     }
 

@@ -86,11 +86,6 @@ public class SilentAim extends Module {
     }
 
     public static boolean renderRotations() {
-        try {
-            Class.forName(BooleanSetting.class.getName(), true, BooleanSetting.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         return renderRotationsSetting.getValue();
     }
 

@@ -1754,14 +1754,10 @@ public final class ActionCoordinator extends ClientHandler {
             String codeName = denyCodeName(result.code());
             String ownerName = activeOwner != null ? activeOwner.getName().toString()
                     : (syntheticAttackClaimOwner != null ? syntheticAttackClaimOwner.getName().toString() : "none");
-            com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ActionCoord." + result.status() + "." + codeName);
-            com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited(
-                    "ac:" + result.type() + ":" + result.code() + ":" + ownerName,
-                    120L,
-                    "ActionCoord",
-                    result.status().name(),
-                    "type=" + result.type() + " code=" + codeName + " owner=" + ownerName
-                            + " inTick=" + inTick + " atk=" + attackSentInTick + " pendingSlot=" + pendingSlot);
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.recordDeny(
+                    ownerName,
+                    "ACT_" + result.type(),
+                    "code=" + codeName + " inTick=" + inTick + " atk=" + attackSentInTick + " pendingSlot=" + pendingSlot);
         }
         return result;
     }

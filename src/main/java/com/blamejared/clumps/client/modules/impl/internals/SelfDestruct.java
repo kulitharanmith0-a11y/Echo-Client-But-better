@@ -448,11 +448,6 @@ public class SelfDestruct extends Module {
     }
 
     private static void initializeClass(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     public static void appendBootstrapSettings(SelfDestruct Module) {

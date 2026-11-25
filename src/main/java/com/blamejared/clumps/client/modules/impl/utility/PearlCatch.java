@@ -188,8 +188,16 @@ public class PearlCatch extends Module {
         }
         handleKeyPresses();
         if (instantPhase != PearlCatchInstantPhase.IDLE) {
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("pc-inst:" + instantPhase, 200L,
+                        "Pearl Catch", "INSTANT_PHASE", "phase=" + instantPhase);
+            }
             advanceInstantSequence();
             return;
+        }
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED && normalStage != PearlCatchStage.IDLE) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("pc-stage:" + normalStage, 200L,
+                    "Pearl Catch", "STAGE", "stage=" + normalStage + " legit=" + legitSequenceActive);
         }
         switch (normalStage) {
             case THROW_PEARL -> handlePearlThrow();

@@ -60,6 +60,17 @@ jobs:
           echo "elapsed_seconds=$ELAPSED" >> "$GITHUB_OUTPUT"
           echo "build_epoch=$END_EPOCH" >> "$GITHUB_OUTPUT"
 
+      - name: Archive private obfuscation mapping
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: obfuscation-mapping-v${{ github.event.inputs.version }}
+          path: |
+            build/obfuscation/mapping.txt
+            build/obfuscation/mixin-mapping.txt
+          if-no-files-found: ignore
+          retention-days: 90
+
       - name: Audit & Publish Release + Mirror + Discord
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,8 +109,8 @@ jobs:
           const listing = execFileSync("unzip", ["-Z1", jarPath], { encoding: "utf8" });
           const entries = listing.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
           const entrySet = new Set(entries);
-          if (!entrySet.has("fabric.mod.json") || !entrySet.has("com/blamejared/clumps/client/ClumpsClient.class")) {
-            throw new Error("Built JAR failed integrity check (missing fabric.mod.json or ClumpsClient.class).");
+          if (!entrySet.has("fabric.mod.json") || !entrySet.has("com/blamejared/clumps/client/init/Initializer.class")) {
+            throw new Error("Built JAR failed integrity check (missing fabric.mod.json or Initializer.class).");
           }
           const badEntries = entries.filter((e) => /echo|dev\/dov|dev\/jadyen/i.test(e));
           if (badEntries.length > 0) {

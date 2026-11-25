@@ -72,6 +72,10 @@ public class Velocity extends Module {
                 event.cancel();
                 client.player.setVelocity(motion.x * scale, motion.y * scale, motion.z * scale);
             }
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("vel-kb", 250L,
+                        "Velocity", "KB_MODIFY", "mode=Cancel scale=" + scale);
+            }
         } else if (mode.isSelected(MINEMEN_CLUB_MODE) && client.player.hurtTime == 7) {
             EntityInteractions.setVelocityX(client.player.getVelocity().getX() * 0.25);
             EntityInteractions.setVelocityY(-0.05350000038743019);

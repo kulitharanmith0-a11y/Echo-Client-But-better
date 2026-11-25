@@ -110,24 +110,9 @@ public class AutoCart extends Module {
     
     @Override
     public void onEnable() {
-        try {
-            Class.forName(PersistentProjectileEntity.class.getName(), true, PersistentProjectileEntity.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         trackedProjectile = null;
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         railPosition = null;
         supportBlockPosition = null;
-        try {
-            Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         targetHitPosition = null;
         pendingBlockHit = null;
         selectedPlacementSlot = -1;
@@ -601,27 +586,12 @@ public class AutoCart extends Module {
     }
 
     private static void initializeProjectileType() {
-        try {
-            Class.forName(PersistentProjectileEntity.class.getName(), true, PersistentProjectileEntity.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     private static void initializePositionType() {
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     private static void initializeVectorType() {
-        try {
-            Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     public static void appendBootstrapSettings(AutoCart Module) {

@@ -1,5 +1,6 @@
 package com.blamejared.clumps.client.settings;
 
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import java.util.function.Predicate;
 
 public class Setting {
@@ -58,6 +59,9 @@ public class Setting {
     }
 
     public void notifyChanged() {
+        if (DevDiagnostics.ENABLED) {
+            DevDiagnostics.recordSettingChange(this);
+        }
         if (changeCallback != null) changeCallback.run();
     }
 

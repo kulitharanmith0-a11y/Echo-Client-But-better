@@ -1,6 +1,7 @@
 .gradle/
 build/
 run/
+logs/
 .idea/
 *.iml
 *.log
@@ -8,5 +9,9 @@ run/
 Thumbs.db
 echo-logo.png
 tools/discord-inbox.md
+tools/discord-inbox.mjs
+tools/setup-discord-inbox.bat
 tools/attachments/
 tools/.discord-*.json
+tools/streamproof-recorder/*.exe
+tools/streamproof-recorder/recordings/

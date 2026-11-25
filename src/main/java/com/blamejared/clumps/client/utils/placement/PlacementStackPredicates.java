@@ -45,11 +45,6 @@ public final class PlacementStackPredicates {
             return false;
         }
         Block block = ((BlockItem) item).getBlock();
-        try {
-            Class.forName(Block.class.getName(), true, Block.class.getClassLoader());
-        } catch (ClassNotFoundException exception) {
-            throw new IllegalStateException("Resolved class initialization failed", exception);
-        }
         return BlockShapeChecks.isDefaultStateFullCube(block);
     }
 }

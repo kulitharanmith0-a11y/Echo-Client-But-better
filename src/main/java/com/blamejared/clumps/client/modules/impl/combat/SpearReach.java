@@ -47,11 +47,6 @@ public class SpearReach extends Module {
     }
 
     private int findSpearSlot() {
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         if (client.player == null) return -1;
         return InventoryItems.findStackInHotbar(SpearReach::isSelectableSpear);
     }
@@ -59,22 +54,7 @@ public class SpearReach extends Module {
     private static boolean isSelectableSpear(ItemStack stack) {
         String[] controlState = readSharedControlState();
         if (controlState == null && stack.isEmpty()) return false;
-        try {
-            Class.forName(Item.class.getName(), true, Item.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         if (!InventoryItems.isSpear(stack.getItem())) return false;
-        try {
-            Class.forName(ItemStack.class.getName(), true, ItemStack.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
-        try {
-            Class.forName(RegistryKey.class.getName(), true, RegistryKey.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         boolean hasLunge = ItemProperties.hasEnchantment(stack, Enchantments.LUNGE);
         return controlState != null ? hasLunge : !hasLunge;
     }
@@ -180,11 +160,6 @@ public class SpearReach extends Module {
     }
 
     public static boolean hasPendingSwap() {
-        try {
-            Class.forName(Class.class.getName(), true, Class.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         return DeferredActionQueue.contains(SpearReach.class);
     }
 

@@ -269,10 +269,5 @@ public class Freecam extends Module {
 
     
     private static void initializeReferencedClass(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 }

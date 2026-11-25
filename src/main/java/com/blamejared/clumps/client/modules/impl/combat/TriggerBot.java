@@ -9,6 +9,7 @@ import com.blamejared.clumps.client.event.input.MouseMovementEvent;
 import com.blamejared.clumps.client.event.interaction.AttackAttemptEvent;
 import com.blamejared.clumps.client.event.interaction.BlockBreakingEvent;
 import com.blamejared.clumps.client.event.interaction.EntityAttackEvent;
+import com.blamejared.clumps.client.event.lifecycle.ClientTickEvent;
 import com.blamejared.clumps.client.event.lifecycle.WorldTickContextEvent;
 import com.blamejared.clumps.client.event.network.PacketReceiveEvent;
 import com.blamejared.clumps.client.event.world.EntityHitboxEvent;
@@ -16,6 +17,7 @@ import com.blamejared.clumps.client.handlers.AttackCooldownTracker;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
 import com.blamejared.clumps.client.handlers.LatencyTracker;
 import com.blamejared.clumps.client.handlers.MouseSensitivity;
+import com.blamejared.clumps.client.handlers.SprintOverrideHandler;
 import com.blamejared.clumps.client.handlers.rotation.AimTransition;
 import com.blamejared.clumps.client.handlers.rotation.RotationManager;
 import com.blamejared.clumps.client.handlers.rotation.RotationPriority;
@@ -121,6 +123,7 @@ public class TriggerBot extends Module {
     private long attackDelayMillis;
     private double sampledGroundCooldown;
     private double sampledCritCooldown;
+    private boolean sprintSuppressedByTriggerBot;
 
     public TriggerBot() {
         super(new ModuleInfo(
@@ -189,6 +192,59 @@ public class TriggerBot extends Module {
         resetCombatState();
         rotations().cancel(this);
         super.onDisable();
+    }
+
+    @Subscribe
+    private void onClientTick(ClientTickEvent event) {
+        if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || MinecraftRenderState.hasOverlay()) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        TriggerBotTiming.CritPolicy policy = currentCritPolicy();
+        if (policy == TriggerBotTiming.CritPolicy.NONE || !passesLoadoutConditions() || isPlayerBusy() || isYieldingToOtherModules()) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        if (holdToAttack.getValue() && !isAttackKeyHeld()) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        boolean jumpPressed = KeybindingCache.isPressed(client.options.jumpKey) || client.options.jumpKey.isPressed();
+        if (critOnlyOnSpace.getValue() && !jumpPressed) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        // Suppress sprint slightly before/at jump apex so STOP_SPRINTING reaches the server before the crit attack packet.
+        boolean approachingOrFallingCrit = !client.player.isOnGround()
+                && !EntityRaycasts.cannotCritOrSprint()
+                && client.player.getVelocity().y <= 0.14
+                && client.player.getAttackCooldownProgress(0.5F) >= 0.72F;
+        if (!approachingOrFallingCrit) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        TargetHit candidate = resolveTargetHit(attackDistance.getValue());
+        if (candidate == null || !isEntityTargetable(candidate.target())
+                || TargetSelection.resolveTarget(candidate.target()) != candidate.target()) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        double distSq = client.player.getCameraPosVec(1.0F).squaredDistanceTo(candidate.hit().getPos());
+        if (!TriggerBotTiming.isWithinRange(distSq, critRange.getLower(), critRange.getUpper())) {
+            releaseCritSprintSuppression();
+            return;
+        }
+        if (!sprintSuppressedByTriggerBot) {
+            SprintOverrideHandler.setSuppressSprint(true);
+            sprintSuppressedByTriggerBot = true;
+        }
+    }
+
+    private void releaseCritSprintSuppression() {
+        if (sprintSuppressedByTriggerBot) {
+            sprintSuppressedByTriggerBot = false;
+            SprintOverrideHandler.setSuppressSprint(false);
+        }
     }
 
     @Subscribe
@@ -390,6 +446,7 @@ public class TriggerBot extends Module {
         attackDelayMillis = sampleDelayMillis(attackDelay);
         sampleAttackCooldowns();
         lastAttackTick = client.player.age;
+        releaseCritSprintSuppression();
     }
 
     @Subscribe
@@ -771,6 +828,7 @@ public class TriggerBot extends Module {
         lastShieldBreakTargetId = -1;
         reactionDelayMillis = 0L;
         attackDelayMillis = 0L;
+        releaseCritSprintSuppression();
     }
 
     private void synchronizeContext() {

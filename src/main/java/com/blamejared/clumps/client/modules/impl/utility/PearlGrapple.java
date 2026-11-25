@@ -191,17 +191,7 @@ public class PearlGrapple extends Module {
 
     @Override
     public void onEnable() {
-        try {
-            Class.forName(PearlCatch.class.getName(), true, PearlCatch.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         PearlGrapplePhase selected = PearlGrapplePhase.SELECT;
-        try {
-            Class.forName(PearlGrapplePhase.class.getName(), true, PearlGrapplePhase.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         phase = selected;
         initializePearlPlayerType();
         target = null;
@@ -716,23 +706,15 @@ public class PearlGrapple extends Module {
     private static float targetDistance() { return Math.min(distance.getValue(), MAX_TARGET_DISTANCE); }
 
     private static void initializePearlPlayerType() {
-        try { Class.forName(PlayerEntity.class.getName(), true, PlayerEntity.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializePearlClientType() {
-        try { Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializePearlVectorType() {
-        try { Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializePearlRotationType() {
-        try { Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     public static void appendBootstrapSettings(PearlGrapple Module) {

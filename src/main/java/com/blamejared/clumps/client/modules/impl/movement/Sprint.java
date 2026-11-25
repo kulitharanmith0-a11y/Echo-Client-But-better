@@ -31,11 +31,6 @@ public class Sprint extends Module {
     @Override
     public void onDisable() {
         int controlState = DiveBomb.readSharedControlState();
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         MinecraftClient observedClient = client;
         if (controlState == 0 && observedClient.player != null) {
             SprintOverrideHandler.resetOverrides();

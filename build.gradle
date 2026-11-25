@@ -15,12 +15,15 @@ description = 'Clumps'
 
 base { archivesName = 'Clumps-fabric-1.21.11-29.0.0.1' }
 
+def devDiagnosticsEnabled = providers.gradleProperty('devDiagnostics').orElse('false').get().toBoolean()
+def obfuscateEnabled = !devDiagnosticsEnabled && providers.gradleProperty('obfuscate').orElse('true').get().toBoolean()
+
 // Loom finalizes archive names in its own afterEvaluate, so the version suffix
 // is stripped after that runs: the release artifact is
 // build/libs/Clumps-fabric-1.21.11-29.0.0.1.jar with no -<version> tail.
 afterEvaluate {
     def buildEpoch = String.valueOf(System.currentTimeMillis().intdiv(1000L))
-    def releaseVer = providers.gradleProperty('client_release').orElse('3.2').get()
+    def releaseVer = providers.gradleProperty('client_release').orElse('3.6.1').get()
     tasks.withType(Jar).configureEach {
         archiveVersion = ''
         manifest {
@@ -30,8 +33,33 @@ afterEvaluate {
             )
         }
     }
-    tasks.matching { it.name == 'remapJar' }.configureEach {
-        archiveFileName = 'Clumps-fabric-1.21.11-29.0.0.1.jar'
+    if (obfuscateEnabled) {
+        def proguardJar = tasks.register('proguardJar', com.blamejared.obf.ProguardObfuscateTask) {
+            dependsOn(tasks.named('jar'))
+            inputJar.set(tasks.named('jar').flatMap { it.archiveFile })
+            libraryClasspath.from(configurations.compileClasspath)
+            dictionarySeed.set(releaseVer.hashCode().toLong() ^ 0x4C554D50533631L)
+            outputJar.set(layout.buildDirectory.file('obfuscation/proguarded-yarn.jar'))
+            mappingFile.set(layout.buildDirectory.file('obfuscation/mapping.txt'))
+        }
+        tasks.matching { it.name == 'remapJar' }.configureEach {
+            dependsOn(proguardJar)
+            inputFile.set(proguardJar.flatMap { it.outputJar })
+            destinationDirectory.set(layout.buildDirectory.dir('obfuscation'))
+            archiveFileName = 'remapped-raw.jar'
+        }
+        def hardenObfuscatedJar = tasks.register('hardenObfuscatedJar', com.blamejared.obf.HardenAndVerifyJarTask) {
+            dependsOn(tasks.named('remapJar'))
+            inputJar.set(tasks.named('remapJar').flatMap { it.archiveFile })
+            outputJar.set(layout.buildDirectory.file('libs/Clumps-fabric-1.21.11-29.0.0.1.jar'))
+            buildSalt.set(releaseVer.hashCode().toLong() ^ 0x7A2F91D3C5E14B09L)
+        }
+        tasks.named('remapJar') { finalizedBy(hardenObfuscatedJar) }
+        tasks.named('assemble') { dependsOn(hardenObfuscatedJar) }
+    } else {
+        tasks.matching { it.name == 'remapJar' }.configureEach {
+            archiveFileName = 'Clumps-fabric-1.21.11-29.0.0.1.jar'
+        }
     }
 }
 
@@ -62,9 +90,13 @@ subprojects { sub ->
     sub.layout.buildDirectory = rootProject.layout.buildDirectory.dir("modules/${sub.name}")
 }
 
+def includeSourcesJar = providers.gradleProperty('includeSources').orElse('false').get().toBoolean()
+
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
-    withSourcesJar()
+    if (includeSourcesJar) {
+        withSourcesJar()
+    }
 }
 
 loom {
@@ -98,14 +130,10 @@ dependencies {
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.0'
 
-    // Public versions observed in the reference's resolved classpath. Minecraft's
-    // own libraries remain launcher-provided; these are compilation dependencies.
-    compileOnly 'com.github.oshi:oshi-core:6.9.0'
+    // Launcher-provided Minecraft libraries used during compilation.
     compileOnly 'com.google.code.gson:gson:2.13.2'
     compileOnly 'com.google.guava:guava:33.5.0-jre'
     compileOnly 'com.mojang:authlib:7.0.61'
-    compileOnly 'com.mojang:brigadier:1.3.10'
-    compileOnly 'com.mojang:datafixerupper:9.0.19'
     compileOnly 'com.mojang:logging:1.6.11'
     compileOnly 'it.unimi.dsi:fastutil:8.5.18'
     compileOnly 'org.joml:joml:1.10.8'
@@ -116,22 +144,7 @@ dependencies {
     compileOnly 'org.apache.commons:commons-lang3:3.19.0'
     compileOnly 'io.netty:netty-buffer:4.2.7.Final'
     compileOnly 'io.netty:netty-transport:4.2.7.Final'
-    compileOnly 'io.netty:netty-codec-http:4.2.7.Final'
-    // Retain the remaining public compile-time APIs from the 111-entry reference
-    // inventory as explicit versions, even when the foundation probe does not use them.
-    compileOnly 'biz.aQute.bnd:biz.aQute.bnd.annotation:7.1.0'
-    compileOnly 'com.github.spotbugs:spotbugs-annotations:4.8.6'
-    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib-common:1.8.20'
-    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.20'
-    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20'
-    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:1.8.20'
-    compileOnly 'org.osgi:org.osgi.annotation.bundle:2.0.0'
-    compileOnly 'org.osgi:org.osgi.annotation.versioning:1.1.2'
-    compileOnly 'org.osgi:org.osgi.resource:1.0.0'
-    compileOnly 'org.osgi:org.osgi.service.serviceloader:1.0.0'
-    ['lwjgl', 'lwjgl-glfw', 'lwjgl-openal', 'lwjgl-opengl', 'lwjgl-stb',
-     'lwjgl-vulkan', 'lwjgl-vma', 'lwjgl-sdl', 'lwjgl-shaderc',
-     'lwjgl-jemalloc', 'lwjgl-freetype', 'lwjgl-tinyfd'].each { module ->
+    ['lwjgl', 'lwjgl-glfw', 'lwjgl-openal', 'lwjgl-opengl', 'lwjgl-stb', 'lwjgl-tinyfd'].each { module ->
         compileOnly "org.lwjgl:${module}:${lwjgl_version}"
     }
 }
@@ -142,8 +155,6 @@ configurations.named('compileClasspath') {
     attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE,
             objects.named(LibraryElements, LibraryElements.JAR))
 }
-
-def devDiagnosticsEnabled = providers.gradleProperty('devDiagnostics').orElse('false').get().toBoolean()
 
 sourceSets {
     main {

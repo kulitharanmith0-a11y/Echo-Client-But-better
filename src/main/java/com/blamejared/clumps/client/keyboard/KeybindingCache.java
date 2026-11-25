@@ -73,10 +73,5 @@ public final class KeybindingCache {
 
     
     private static void ensureInitialized(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException exception) {
-            throw new IllegalStateException("Resolved class initialization failed", exception);
-        }
     }
 }

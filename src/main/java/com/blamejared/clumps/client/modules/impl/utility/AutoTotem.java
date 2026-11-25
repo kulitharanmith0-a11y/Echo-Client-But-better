@@ -59,7 +59,7 @@ public class AutoTotem extends Module {
         }
         refillHotbar.tooltip("Appearance");
         slotToRefillTotem.tooltip("Appearance");
-        healthSwap.tooltip(HEALTH_GROUP).restrict();
+        healthSwap.tooltip(HEALTH_GROUP);
         equipBelow.tooltip(HEALTH_GROUP);
         restoreAbove.tooltip(HEALTH_GROUP);
         restoreItem.tooltip(HEALTH_GROUP);

@@ -2,6 +2,7 @@ package com.blamejared.clumps.client.modules;
 
 import com.blamejared.clumps.client.ClumpsClient;
 import com.blamejared.clumps.client.MinecraftAccess;
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.event.EventBus;
 import com.blamejared.clumps.client.handlers.action.ActionCoordinator;
 import com.blamejared.clumps.client.handlers.rotation.RotationManager;
@@ -140,9 +141,16 @@ public class Module implements MinecraftAccess {
             return;
         }
         if (requested && !canEnable()) {
+            if (DevDiagnostics.ENABLED) {
+                DevDiagnostics.recordModuleState(getName().toString(), "MODULE_ENABLE_BLOCKED", "canEnable=false");
+            }
             return;
         }
         enabled = requested;
+        if (DevDiagnostics.ENABLED) {
+            DevDiagnostics.recordModuleState(getName().toString(), enabled ? "MODULE_ENABLE" : "MODULE_DISABLE",
+                    "cat=" + getCategory());
+        }
         if (enabled) {
             onEnable();
         } else {

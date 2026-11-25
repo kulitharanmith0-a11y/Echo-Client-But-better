@@ -252,6 +252,10 @@ public class BaseFinder extends Module {
         List<BaseCluster> built = buildClusters(detected);
         clusters.clear();
         clusters.addAll(built);
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED && !built.isEmpty()) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.logRateLimited("basefinder-scan", 5000L,
+                    "Base Finder", "SCAN", "blocks=" + detected.size() + " clusters=" + built.size() + " range=" + maxDist);
+        }
 
         if (notifyOnFind.getValue()) {
             for (BaseCluster cluster : built) {

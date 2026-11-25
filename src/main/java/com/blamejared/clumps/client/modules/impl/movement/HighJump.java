@@ -107,11 +107,6 @@ public class HighJump extends Module {
     @Override
     public void onDisable() {
         super.onDisable();
-        try {
-            Class.forName(net.minecraft.util.math.BlockPos.class.getName(), true, net.minecraft.util.math.BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         pendingPlacement = null;
         placementTimeoutTicks = 0;
         remainingJumpTicks = 0;
@@ -126,11 +121,6 @@ public class HighJump extends Module {
     }
 
     private void clearJumpState() {
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         pendingPlacement = null;
         placementTimeoutTicks = 0;
         remainingJumpTicks = 0;

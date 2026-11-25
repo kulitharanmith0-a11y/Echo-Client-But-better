@@ -18,13 +18,19 @@ class TriggerBotTimingTest {
     }
 
     @Test
-    void preciseCritRequiresFallingAndNotSprinting() {
+    void normalAndPreciseCritRequireFallingAndNotSprinting() {
         assertTrue(TriggerBotTiming.allowsCriticalTiming(
                 CritPolicy.PRECISE, true, false, false, false, true, false, false));
         assertFalse(TriggerBotTiming.allowsCriticalTiming(
                 CritPolicy.PRECISE, true, false, false, false, true, true, false));
         assertTrue(TriggerBotTiming.allowsCriticalTiming(
+                CritPolicy.NORMAL, true, false, false, false, true, false, false));
+        assertFalse(TriggerBotTiming.allowsCriticalTiming(
                 CritPolicy.NORMAL, true, false, false, false, true, true, false));
+        assertTrue(TriggerBotTiming.allowsCriticalTiming(
+                CritPolicy.NORMAL, true, false, false, true, false, false, true));
+        assertFalse(TriggerBotTiming.allowsCriticalTiming(
+                CritPolicy.NORMAL, true, false, true, true, false, false, true));
         assertTrue(TriggerBotTiming.allowsCriticalTiming(
                 CritPolicy.NONE, true, true, true, true, false, true, false));
     }

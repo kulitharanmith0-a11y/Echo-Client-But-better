@@ -310,10 +310,5 @@ public class ClumpsClient implements ModInitializer, SimpleSynchronousResourceRe
 
     
     private static void initializeReferencedClass(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 }

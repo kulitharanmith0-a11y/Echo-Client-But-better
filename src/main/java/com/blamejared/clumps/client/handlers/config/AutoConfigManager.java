@@ -565,7 +565,12 @@ public final class AutoConfigManager extends ClientHandler {
         if (ClumpsClient.ModuleConfig == null || configName == null || configName.isBlank()) {
             return false;
         }
-        return ClumpsClient.ModuleConfig.loadForAutoConfig(configName);
+        boolean ok = ClumpsClient.ModuleConfig.loadForAutoConfig(configName);
+        if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+            com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("AutoConfig",
+                    ok ? "KIT_SWITCH_OK" : "KIT_SWITCH_FAIL", "kit=" + kitLabel + " cfg=" + configName);
+        }
+        return ok;
     }
 
     private DetectedKit detectKit() {

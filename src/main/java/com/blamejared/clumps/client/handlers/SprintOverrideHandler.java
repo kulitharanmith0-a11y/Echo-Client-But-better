@@ -1,5 +1,6 @@
 package com.blamejared.clumps.client.handlers;
 
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.KeyPressedQueryEvent;
 import com.blamejared.clumps.client.event.lifecycle.WorldTickContextEvent;
@@ -11,6 +12,9 @@ public class SprintOverrideHandler extends ClientHandler {
     private static boolean suppressSprint;
 
     public static void setForceSprint(boolean force) {
+        if (DevDiagnostics.ENABLED && forceSprint != force) {
+            DevDiagnostics.logRateLimited("sprint-force:" + force, 200L, "SprintOverride", "FORCE_SPRINT", "value=" + force);
+        }
         forceSprint = force;
         if (!force || CLIENT.player == null || CLIENT.player.isSprinting()) {
             return;
@@ -20,6 +24,9 @@ public class SprintOverrideHandler extends ClientHandler {
     }
 
     public static void setSuppressSprint(boolean suppress) {
+        if (DevDiagnostics.ENABLED && suppressSprint != suppress) {
+            DevDiagnostics.logRateLimited("sprint-suppress:" + suppress, 200L, "SprintOverride", "SUPPRESS_SPRINT", "value=" + suppress);
+        }
         suppressSprint = suppress;
         if (!suppress || CLIENT.player == null || !CLIENT.player.isSprinting()) {
             return;

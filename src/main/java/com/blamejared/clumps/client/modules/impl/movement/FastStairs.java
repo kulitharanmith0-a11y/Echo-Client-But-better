@@ -26,11 +26,6 @@ public class FastStairs extends Module {
         if (isOutsideWorld() || !isEnabled()) {
             return;
         }
-        try {
-            Class.forName(Screen.class.getName(), true, Screen.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         if (MinecraftClient.getInstance().currentScreen != null) {
             return;
         }

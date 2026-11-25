@@ -281,11 +281,6 @@ public class Backtrack extends Module {
     }
 
     private static void initializeResolvedClass(Class<?> type) {
-        try {
-            Class.forName(type.getName(), true, type.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     private synchronized void resetTracking(boolean flushPending) {

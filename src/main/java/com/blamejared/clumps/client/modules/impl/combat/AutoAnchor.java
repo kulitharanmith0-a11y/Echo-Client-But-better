@@ -220,11 +220,6 @@ public class AutoAnchor extends Module {
 
     @Override
     public void onDisable() {
-        try {
-            Class.forName(SpearReach.class.getName(), true, SpearReach.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         sequenceRequested = false;
         activateWasPressed = false;
         restorePending = false;
@@ -1102,23 +1097,15 @@ public class AutoAnchor extends Module {
     private int sampleDelay(FloatRangeSetting delay) { return Math.max(0, Math.round(delay.sampleGaussian())); }
 
     private static void initializeRotationType() {
-        try { Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializePhaseType() {
-        try { Class.forName(Phase.class.getName(), true, Phase.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializePositionType() {
-        try { Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     private static void initializeVectorType() {
-        try { Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader()); }
-        catch (ClassNotFoundException failure) { throw new IllegalStateException("Resolved class initialization failed", failure); }
     }
 
     public static void appendBootstrapSettings(AutoAnchor Module) {

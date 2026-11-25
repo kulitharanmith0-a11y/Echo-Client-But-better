@@ -17,4 +17,19 @@ public final class DevDiagnostics {
 
     public static void metric(String metricKey) {
     }
+
+    public static void recordEventDispatch(String moduleName, String eventName, long durationNanos, boolean cancelledEvent) {
+    }
+
+    public static void recordCrash(String moduleName, String eventName, String methodName, Throwable error) {
+    }
+
+    public static void recordDeny(String moduleName, String category, String reason) {
+    }
+
+    public static void recordModuleState(String moduleName, String stateEvent, String detail) {
+    }
+
+    public static void recordSettingChange(com.blamejared.clumps.client.settings.Setting setting) {
+    }
 }

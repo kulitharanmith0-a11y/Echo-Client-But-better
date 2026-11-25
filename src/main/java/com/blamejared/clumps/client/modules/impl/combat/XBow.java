@@ -108,18 +108,8 @@ public class XBow extends Module {
     
     @Override
     public void onEnable() {
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         targetBlockPosition = null;
         supportBlockPosition = null;
-        try {
-            Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         cachedTargetPosition = null;
         targetHitPosition = null;
         pendingBlockHit = null;
@@ -135,28 +125,13 @@ public class XBow extends Module {
     public void onDisable() {
         clearPlacementState();
         DeferredActionQueue.finish(this, true);
-        try {
-            Class.forName(BooleanSetting.class.getName(), true, BooleanSetting.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         if (silentRotations.getValue()) {
-            try {
-                Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader());
-            } catch (ClassNotFoundException failure) {
-                throw new IllegalStateException("Resolved class initialization failed", failure);
-            }
             if (rotations().isOwnedBy(this)) {
                 waitingForRotationRelease = true;
                 return;
             }
         }
         waitingForRotationRelease = false;
-        try {
-            Class.forName(RotationManager.class.getName(), true, RotationManager.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         rotations().cancel(this);
         super.onDisable();
     }
@@ -401,29 +376,9 @@ public class XBow extends Module {
     }
 
     private void clearPlacementState() {
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         targetBlockPosition = null;
-        try {
-            Class.forName(BlockPos.class.getName(), true, BlockPos.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         supportBlockPosition = null;
-        try {
-            Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         cachedTargetPosition = null;
-        try {
-            Class.forName(Vec3d.class.getName(), true, Vec3d.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         targetHitPosition = null;
         pendingBlockHit = null;
         selectedPlacementSlot = -1;

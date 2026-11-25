@@ -167,8 +167,16 @@ public class BreachSwap extends Module {
         if (client.player.getInventory().getSelectedSlot() != event.slot) {
             int ticks = Math.max(0, Math.round(returnDelay.sampleGaussian()));
             if (!DeferredActionQueue.select(this, event.slot, ticks, true, this::onSwapEnded)) {
+                if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.recordDeny("Breach Swap", "SLOT", "slot=" + event.slot);
+                }
                 resetPendingAttack();
                 return;
+            }
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("BreachSwap.swap_ok");
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("Breach Swap", "SWAP_MACE",
+                        "slot=" + event.slot + " retTicks=" + ticks + " target=" + pendingTargetId);
             }
         }
         event.addClick();

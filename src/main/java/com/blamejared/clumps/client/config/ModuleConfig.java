@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.blamejared.clumps.client.ClumpsClient;
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.modules.ModuleManager;
 import com.blamejared.clumps.client.modules.internals.ClickGui;
@@ -203,8 +204,16 @@ public final class ModuleConfig implements AutoCloseable {
     public boolean loadSnapshot(String data) {
         loading = true;
         try {
-            return apply(json.fromJson(data, JsonObject.class));
+            boolean ok = apply(json.fromJson(data, JsonObject.class));
+            if (DevDiagnostics.ENABLED) {
+                DevDiagnostics.log("Config", ok ? "CONFIG_LOAD_OK" : "CONFIG_LOAD_FAIL",
+                        "activeId=" + catalog.activeConfigId());
+            }
+            return ok;
         } catch (Exception failure) {
+            if (DevDiagnostics.ENABLED) {
+                DevDiagnostics.recordCrash("Config", "loadSnapshot", "apply", failure);
+            }
             return false;
         } finally {
             loading = false;

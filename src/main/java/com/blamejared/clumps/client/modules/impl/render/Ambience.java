@@ -128,26 +128,11 @@ public class Ambience extends Module {
     public void onDisable() {
         boolean resetRain = Freecam.isPerspectiveRefreshEnabled();
         super.onDisable();
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         MinecraftClient observedClient = client;
         if (resetRain && Objects.requireNonNull(observedClient, "object reference is null").world == null) return;
         if (resetRain) {
-            try {
-                Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-            } catch (ClassNotFoundException failure) {
-                throw new IllegalStateException("Resolved class initialization failed", failure);
-            }
             MinecraftClient rainClient = client;
             Objects.requireNonNull(Objects.requireNonNull(rainClient, "object reference is null").world, "object reference is null").setRainGradient(0.0f);
-            try {
-                Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-            } catch (ClassNotFoundException failure) {
-                throw new IllegalStateException("Resolved class initialization failed", failure);
-            }
             observedClient = client;
         }
         Objects.requireNonNull(Objects.requireNonNull(observedClient, "object reference is null").world, "object reference is null").setThunderGradient(0.0f);

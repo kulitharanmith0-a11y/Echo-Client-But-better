@@ -82,27 +82,12 @@ public class AutoClicker extends Module {
     @Override
     public void onEnable() {
         super.onEnable();
-        try {
-            Class.forName(CooldownTimer.class.getName(), true, CooldownTimer.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         java.util.Objects.requireNonNull(clickRateTimer, "object reference is null").reset();
-        try {
-            Class.forName(FloatRangeSetting.class.getName(), true, FloatRangeSetting.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         float initialRate = java.util.Objects.requireNonNull(cps, "object reference is null").sampleGaussian();
         targetClicksPerSecond = initialRate;
         currentClicksPerSecond = initialRate;
         nextRateChangeMillis = 0L;
         nextClickMillis = 0L;
-        try {
-            Class.forName(CooldownTimer.class.getName(), true, CooldownTimer.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         java.util.Objects.requireNonNull(burstTimer, "object reference is null").reset();
         burstClickCount = 0;
     }

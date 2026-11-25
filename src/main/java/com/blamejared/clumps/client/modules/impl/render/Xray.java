@@ -413,11 +413,6 @@ public class Xray extends Module {
 
     
     private static void initializeFreecamState() {
-        try {
-            Class.forName(Freecam.class.getName(), true, Freecam.class.getClassLoader());
-        } catch (ClassNotFoundException impossibleForClassLiteral) {
-            throw new IllegalStateException("Resolved class initialization failed", impossibleForClassLiteral);
-        }
     }
 
     

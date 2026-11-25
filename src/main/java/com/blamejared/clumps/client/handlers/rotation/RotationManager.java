@@ -4,6 +4,7 @@ import com.blamejared.clumps.client.ClumpsClient;
 import com.blamejared.clumps.client.event.Event;
 
 import com.blamejared.clumps.client.handlers.MouseDelta;
+import com.blamejared.clumps.client.diagnostics.DevDiagnostics;
 import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.HandleInputEvent;
@@ -75,11 +76,29 @@ public final class RotationManager extends ClientHandler {
 
     
     public Optional<RotationRequest> request(Module owner, RotationPriority priority) {
-        if (!hasPlayerAndWorld() || activeScope != null) return Optional.empty();
+        if (!hasPlayerAndWorld()) return Optional.empty();
+        if (activeScope != null) {
+            if (DevDiagnostics.ENABLED && owner != null) {
+                DevDiagnostics.recordDeny(owner.getName().toString(), "ROT", "activeScope_override");
+            }
+            return Optional.empty();
+        }
         synchronizeContext();
         if (activeRequest != null && activeRequest.isActive()) {
             if (activeRequest.owner() == owner) return Optional.of(activeRequest);
-            if (!priority.higherThan(activeRequest.priority())) return Optional.empty();
+            if (!priority.higherThan(activeRequest.priority())) {
+                if (DevDiagnostics.ENABLED && owner != null) {
+                    String holder = activeRequest.owner() != null ? activeRequest.owner().getName().toString() : "?";
+                    DevDiagnostics.recordDeny(owner.getName().toString(), "ROT",
+                            "prio=" + priority + "<=" + activeRequest.priority() + " holder=" + holder);
+                }
+                return Optional.empty();
+            }
+            if (DevDiagnostics.ENABLED && owner != null) {
+                String prevHolder = activeRequest.owner() != null ? activeRequest.owner().getName().toString() : "?";
+                DevDiagnostics.logRateLimited("rot-preempt:" + owner.getName() + ":" + prevHolder, 250L,
+                        owner.getName().toString(), "ROT_PREEMPT", "over=" + prevHolder + " prio=" + priority);
+            }
             activeRequest.invalidate();
             resetMouseInjection();
         }

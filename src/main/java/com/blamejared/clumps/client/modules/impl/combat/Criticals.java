@@ -75,22 +75,12 @@ public class Criticals extends Module {
 
     private static boolean isCurrentAttackReady() {
         String[] controlState = SpearReach.readSharedControlState();
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         float difference = client.player.getAttackCooldownProgress(0.5f) - 0.9f;
         return controlState != null ? difference != 0.0f : difference > 0.0f;
     }
 
     private static boolean isNextAttackReady() {
         String[] controlState = SpearReach.readSharedControlState();
-        try {
-            Class.forName(MinecraftClient.class.getName(), true, MinecraftClient.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
         float difference = client.player.getAttackCooldownProgress(1.5f) - 0.9f;
         return controlState != null ? difference != 0.0f : difference > 0.0f;
     }

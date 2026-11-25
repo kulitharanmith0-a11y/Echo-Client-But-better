@@ -98,10 +98,16 @@ public class DiveBomb extends Module {
         boolean pressed = diveBomb.getKey().isPressed();
         if (pressed && !previousNormalPress) {
             if (rotations().snapshot().target() != null && !rotations().canRequest(this, RotationPriority.HIGH)) {
+                if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                    com.blamejared.clumps.client.diagnostics.DevDiagnostics.recordDeny("Dive Bomb", "ROT", "high_prio_busy");
+                }
                 return;
             }
             throwActive = true;
             throwStage = 0;
+            if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
+                com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("Dive Bomb", "SEQ_START", "delay=" + tickDelay.getValue());
+            }
         }
         previousNormalPress = pressed;
         if (!throwActive || !rotations().isAiming()) {

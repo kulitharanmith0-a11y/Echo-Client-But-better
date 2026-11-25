@@ -450,19 +450,9 @@ public class ShieldBreaker extends Module {
     }
 
     private static void initializePlayerEntityClass() {
-        try {
-            Class.forName(PlayerEntity.class.getName(), true, PlayerEntity.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     private static void initializeActionTimerClass() {
-        try {
-            Class.forName(CooldownTimer.class.getName(), true, CooldownTimer.class.getClassLoader());
-        } catch (ClassNotFoundException failure) {
-            throw new IllegalStateException("Resolved class initialization failed", failure);
-        }
     }
 
     public static void appendBootstrapSettings(ShieldBreaker Module) {

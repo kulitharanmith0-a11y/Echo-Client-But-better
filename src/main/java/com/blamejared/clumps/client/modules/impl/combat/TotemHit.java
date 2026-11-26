@@ -11,6 +11,8 @@ import com.blamejared.clumps.client.modules.ModuleCategory;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.modules.ModuleInfo;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
+import com.blamejared.clumps.client.handlers.action.ActionCoordinator;
+import com.blamejared.clumps.client.mixin.accessor.ClientPlayerInteractionManagerAccessor;
 import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.FloatRangeSetting;
 import com.blamejared.clumps.client.utils.items.InventoryItems;
@@ -71,8 +73,7 @@ public class TotemHit extends Module {
         }
         knockbackSwordSlot = -1;
         int delayTicks = silentSwap.getValue() ? 0 : (int) delay.sampleGaussian();
-        boolean restoreAll = !silentSwap.getValue();
-        if (!DeferredActionQueue.select(this, event.slot, delayTicks, restoreAll, () -> hotbarActionActive = false)) {
+        if (!DeferredActionQueue.select(this, event.slot, delayTicks, true, () -> hotbarActionActive = false)) {
             resetSwordSwap();
             return;
         }
@@ -97,10 +98,45 @@ public class TotemHit extends Module {
         if (!TargetSelection.isValidTarget(target)) return;
         int slot = findKnockbackSword();
         if (slot == -1 || DeferredActionQueue.contains(this)) return;
+        if (silentSwap.getValue()) {
+            if (performSilentSwapAttack(target, slot)) {
+                event.setClickCount(0);
+            }
+            return;
+        }
         event.setClickCount(0);
         knockbackSwordSlot = slot;
         swordSwapPending = true;
         lastSwordSwapTick = client.player.age;
+    }
+
+    private boolean performSilentSwapAttack(LivingEntity target, int swordSlot) {
+        if (client.player == null || client.interactionManager == null) {
+            return false;
+        }
+        ActionCoordinator coordinator = actions();
+        if (coordinator == null || !coordinator.canSelectSlot(this, swordSlot, false, false)) {
+            return false;
+        }
+        int totemSlot = client.player.getInventory().getSelectedSlot();
+        if (totemSlot == swordSlot) {
+            return false;
+        }
+        hotbarActionActive = true;
+        try {
+            if (!coordinator.executeSlotSelect(this, swordSlot, false).succeeded()) {
+                return false;
+            }
+            return coordinator.executeEntityAttack(this, target, true).succeeded();
+        } finally {
+            if (client.player.getInventory().getSelectedSlot() != totemSlot) {
+                client.player.getInventory().setSelectedSlot(totemSlot);
+            }
+            if (client.interactionManager != null) {
+                ((ClientPlayerInteractionManagerAccessor) client.interactionManager).invokeSyncSelectedSlot();
+            }
+            hotbarActionActive = false;
+        }
     }
 
     private void resetSwordSwap() {

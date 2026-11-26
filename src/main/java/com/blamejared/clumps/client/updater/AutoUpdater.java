@@ -971,6 +971,23 @@ public final class AutoUpdater {
         return sb.substring(0, end);
     }
 
+    public static String[] catalogEndpoints(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return new String[0];
+        }
+        String apiUrl = replaceLeaf(decodeChars(API_MANIFEST_CHARS), fileName);
+        String rawUrl = replaceLeaf(decodeManifestUrl(), fileName);
+        return new String[]{apiUrl, rawUrl};
+    }
+
+    private static String replaceLeaf(String url, String fileName) {
+        int slash = url.lastIndexOf('/');
+        if (slash < 0) {
+            return url;
+        }
+        return url.substring(0, slash + 1) + fileName;
+    }
+
     private static String decodeManifestUrl() {
         return decodeChars(MANIFEST_CHARS);
     }

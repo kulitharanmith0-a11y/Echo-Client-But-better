@@ -26,6 +26,7 @@ public final class RenderBackendManager implements AutoCloseable {
     private static final int GRAPHICS_AND_PRESENT_QUEUE = 9;
     private static final int DEPTH_ATTACHMENT_USAGE = 8;
     private static final int DEPTH_MIP_LEVELS = 1;
+    private static final int MAX_TRANSIENT_CAPTURE_FAILURES = 20;
 
     private final WindowHandle window;
     private final Surface surface;
@@ -38,6 +39,7 @@ public final class RenderBackendManager implements AutoCloseable {
     private final FramebufferBlur framebufferBlur;
     private final long invisibleCursor;
     private boolean osCursorHidden;
+    private int consecutiveCaptureFailures;
     private final double[] cursorXBuf = new double[1];
     private final double[] cursorYBuf = new double[1];
 
@@ -141,10 +143,14 @@ public final class RenderBackendManager implements AutoCloseable {
             restoreOsCursor();
             window.setVisible(false);
             if (window.isCaptureFailed()) {
-                ClumpsClient.failStreamProof();
+                consecutiveCaptureFailures++;
+                if (consecutiveCaptureFailures >= MAX_TRANSIENT_CAPTURE_FAILURES) {
+                    ClumpsClient.failStreamProof();
+                }
             }
             return;
         }
+        consecutiveCaptureFailures = 0;
         int width = window.framebufferWidth();
         int height = window.framebufferHeight();
         if (width <= 0 || height <= 0) {

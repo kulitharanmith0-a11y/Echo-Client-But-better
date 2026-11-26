@@ -56,8 +56,7 @@ public final class ConfigCardRules {
     
     public boolean hasLocalLoadTarget(ConfigCard card) {
         if (!card.publicVisibility) return true;
-        if (card.owned) return false;
-        return firstCopy(card) != null;
+        return !card.owned;
     }
 
     
@@ -79,10 +78,14 @@ public final class ConfigCardRules {
     public List<ConfigMenuAction> menuActions(ConfigCard card) {
         List<ConfigMenuAction> actions = new ArrayList<>();
         if (card.publicVisibility) {
-            actions.add(ConfigMenuAction.ADD_COPY);
+            if (firstCopy(card) != null) {
+                actions.add(ConfigMenuAction.ADD_COPY);
+            }
+            actions.add(ConfigMenuAction.COPY_CODE);
             return actions;
         }
         actions.add(ConfigMenuAction.EDIT);
+        actions.add(ConfigMenuAction.COPY_CODE);
         if (publishing.canPublish()) {
             actions.add(card.isPublished() ? ConfigMenuAction.UPDATE_PUBLIC : ConfigMenuAction.PUBLISH);
         }

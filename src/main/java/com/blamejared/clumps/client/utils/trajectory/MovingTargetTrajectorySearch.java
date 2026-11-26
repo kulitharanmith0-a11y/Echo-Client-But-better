@@ -21,7 +21,8 @@ import net.minecraft.world.RaycastContext;
 
 public final class MovingTargetTrajectorySearch implements MinecraftAccess {
     private static final Vec3d[] SPREAD = TrajectoryNumerics.movingTargetSpread();
-    private static final float[] ANGLE_OFFSETS = {0.0F, -0.35F, 0.35F, -0.75F, 0.75F, -1.25F, 1.25F};
+    private static final float[] ANGLE_OFFSETS = {0.0F, -0.4F, 0.4F, -0.85F, 0.85F, -1.4F, 1.4F};
+    private static final float[] FINE_ANGLE_OFFSETS = {0.0F, -0.2F, 0.2F, -0.1F, 0.1F};
     private static final EntityDimensions GLIDING_DIMENSIONS = EntityDimensions.changing(0.6F, 0.6F);
 
     private MovingTargetTrajectorySearch() {
@@ -264,7 +265,15 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
         MovingTargetLaunch best = null;
         for (Rotation angle : angles) {
             MovingTargetLaunch candidate = refine(path, angle);
-            if (candidate != null && (best == null || candidate.hitFraction() > best.hitFraction())) {
+            if (candidate == null) {
+                continue;
+            }
+            if (best == null
+                    || candidate.hitFraction() > best.hitFraction() + 0.06
+                    || (Math.abs(candidate.hitFraction() - best.hitFraction()) <= 0.06
+                            && (candidate.meanHitTick() < best.meanHitTick()
+                                    || (candidate.meanHitTick() == best.meanHitTick()
+                                            && candidate.hitFraction() > best.hitFraction())))) {
                 best = candidate;
             }
         }
@@ -285,19 +294,47 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
     }
 
     private static MovingTargetLaunch refine(TargetPath path, Rotation angle) {
-        MovingTargetLaunch best = null;
+        ScoredLaunch coarse = null;
         for (float yawOffset : ANGLE_OFFSETS) {
             for (float pitchOffset : ANGLE_OFFSETS) {
-                MovingTargetLaunch candidate = evaluate(path, angle.yaw() + yawOffset, MathHelper.clamp(angle.pitch() + pitchOffset, -90.0F, 90.0F));
-                if (candidate != null && (best == null || candidate.hitFraction() > best.hitFraction())) {
-                    best = candidate;
-                }
-                if (best != null && best.hitFraction() >= 1.0) {
-                    return best;
+                ScoredLaunch candidate = evaluateScored(path, angle.yaw() + yawOffset, MathHelper.clamp(angle.pitch() + pitchOffset, -90.0F, 90.0F));
+                if (isBetterLaunch(candidate, coarse)) {
+                    coarse = candidate;
                 }
             }
         }
-        return best;
+        if (coarse == null) {
+            return null;
+        }
+        ScoredLaunch best = coarse;
+        for (float yawOffset : FINE_ANGLE_OFFSETS) {
+            for (float pitchOffset : FINE_ANGLE_OFFSETS) {
+                if (yawOffset == 0.0F && pitchOffset == 0.0F) {
+                    continue;
+                }
+                ScoredLaunch candidate = evaluateScored(path, coarse.launch().yaw() + yawOffset, MathHelper.clamp(coarse.launch().pitch() + pitchOffset, -90.0F, 90.0F));
+                if (isBetterLaunch(candidate, best)) {
+                    best = candidate;
+                }
+            }
+        }
+        return best.launch();
+    }
+
+    private static boolean isBetterLaunch(ScoredLaunch candidate, ScoredLaunch current) {
+        if (candidate == null) {
+            return false;
+        }
+        if (current == null) {
+            return true;
+        }
+        if (candidate.launch().hitFraction() > current.launch().hitFraction() + 1.0E-9) {
+            return true;
+        }
+        if (Math.abs(candidate.launch().hitFraction() - current.launch().hitFraction()) <= 1.0E-9) {
+            return candidate.centerErrorSq() < current.centerErrorSq() - 1.0E-6;
+        }
+        return false;
     }
 
     public static double hitFraction(TargetPath path, float yaw, float pitch) {
@@ -306,12 +343,17 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
     }
 
     private static MovingTargetLaunch evaluate(TargetPath path, float yaw, float pitch) {
+        ScoredLaunch scored = evaluateScored(path, yaw, pitch);
+        return scored == null ? null : scored.launch();
+    }
+
+    private static ScoredLaunch evaluateScored(TargetPath path, float yaw, float pitch) {
         Vec3d direction = Vec3d.fromPolar(pitch, yaw);
         int horizon = path.targetBoxes().length - 1;
-        int central = trace(path, direction, SPREAD[0], horizon, horizon, true);
-        int spreadHorizon = central < 0 ? -central - 1 : horizon;
-        int hits = central > 0 ? 1 : 0;
-        int tickSum = Math.max(0, central);
+        TraceResult central = traceWithCenterError(path, direction, SPREAD[0], horizon, horizon, true);
+        int spreadHorizon = central.hitTick() < 0 ? -central.hitTick() - 1 : horizon;
+        int hits = central.hitTick() > 0 ? 1 : 0;
+        int tickSum = Math.max(0, central.hitTick());
         for (int sample = 1; sample < 16; sample++) {
             int hit = trace(path, direction, SPREAD[sample], spreadHorizon, 8, false);
             if (hit > 0) {
@@ -319,37 +361,57 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
                 tickSum += hit;
             }
         }
-        return hits == 0 ? null : new MovingTargetLaunch(yaw, pitch, hits / 16.0, Math.round((float) tickSum / (float) hits));
+        if (hits == 0) {
+            return null;
+        }
+        MovingTargetLaunch launch = new MovingTargetLaunch(yaw, pitch, hits / 16.0, Math.round((float) tickSum / (float) hits));
+        return new ScoredLaunch(launch, central.centerErrorSq());
     }
 
     private static int trace(TargetPath path, Vec3d direction, Vec3d spread, int horizon, int worldCollisionTicks, boolean checkObstructions) {
+        return traceWithCenterError(path, direction, spread, horizon, worldCollisionTicks, checkObstructions).hitTick();
+    }
+
+    private static TraceResult traceWithCenterError(TargetPath path, Vec3d direction, Vec3d spread, int horizon, int worldCollisionTicks, boolean checkObstructions) {
         Vec3d position = path.launchPosition();
         Vec3d velocity = direction.add(spread).multiply(1.5).add(path.inheritedVelocity());
         for (int tick = 1; tick <= horizon; tick++) {
+            // Exact Minecraft 1.21.11 ThrownEntity.tick() order: applyGravity -> applyDrag -> collision & move.
+            velocity = new Vec3d(velocity.x * 0.99, (velocity.y - 0.03) * 0.99, velocity.z * 0.99);
             Vec3d next = position.add(velocity);
-            if (path.targetBoxes()[tick].expand(TrajectoryTolerance.collisionExpansion(tick)).raycast(position, next).isPresent()) {
-                return tick;
+            double expansion = TrajectoryTolerance.collisionExpansion(tick - 1);
+            Box targetBox = path.targetBoxes()[tick];
+            var hitPoint = targetBox.expand(expansion).raycast(position, next);
+            if (hitPoint.isPresent()) {
+                return new TraceResult(tick, hitPoint.get().squaredDistanceTo(targetBox.getCenter()));
             }
-            if (tick <= worldCollisionTicks && CLIENT.world.raycast(new RaycastContext(position, next, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, CLIENT.player))
+            if (tick <= worldCollisionTicks && CLIENT.world != null && CLIENT.player != null
+                    && CLIENT.world.raycast(new RaycastContext(position, next, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, CLIENT.player))
                     .getType() != HitResult.Type.MISS) {
-                return -tick;
+                return new TraceResult(-tick, Double.MAX_VALUE);
             }
             if (checkObstructions && tick > 1) {
                 for (Box obstruction : path.obstructionBoxes()) {
-                    if (obstruction.expand(TrajectoryTolerance.collisionExpansion(tick)).raycast(position, next).isPresent()) {
-                        return -tick;
+                    if (obstruction.expand(expansion).raycast(position, next).isPresent()) {
+                        return new TraceResult(-tick, Double.MAX_VALUE);
                     }
                 }
             }
             position = next;
-            velocity = velocity.multiply(0.99).subtract(0.0, 0.03, 0.0);
         }
-        return 0;
+        return new TraceResult(0, Double.MAX_VALUE);
+    }
+
+    private record TraceResult(int hitTick, double centerErrorSq) {
+    }
+
+    private record ScoredLaunch(MovingTargetLaunch launch, double centerErrorSq) {
     }
 
     /**
-     * Simulates an in-flight ender pearl using exact vanilla pearl physics (drag 0.99 in air / 0.8 in water,
-     * gravity 0.03 per tick) and returns the landing position, or {@code null} if it never hits within {@code maxTicks}.
+     * Simulates an in-flight ender pearl using exact Minecraft 1.21.11 pearl physics
+     * (gravity 0.03, then drag 0.99 in air / 0.8 in water, then move & raycast)
+     * and returns the landing position, or {@code null} if it never hits within {@code maxTicks}.
      */
     public static Vec3d predictPearlLanding(Vec3d startPos, Vec3d startVel, int maxTicks) {
         if (CLIENT.world == null || CLIENT.player == null || startPos == null || startVel == null) {
@@ -358,15 +420,16 @@ public final class MovingTargetTrajectorySearch implements MinecraftAccess {
         Vec3d pos = startPos;
         Vec3d vel = startVel;
         for (int tick = 0; tick < maxTicks; tick++) {
+            boolean inWater = CLIENT.world.getFluidState(BlockPos.ofFloored(pos)).isIn(FluidTags.WATER);
+            double drag = inWater ? 0.8 : 0.99;
+            vel = new Vec3d(vel.x * drag, (vel.y - 0.03) * drag, vel.z * drag);
             Vec3d next = pos.add(vel);
             BlockHitResult blockHit = CLIENT.world.raycast(new RaycastContext(
                     pos, next, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, CLIENT.player));
             if (blockHit != null && blockHit.getType() != HitResult.Type.MISS) {
                 return blockHit.getPos();
             }
-            boolean inWater = CLIENT.world.getFluidState(BlockPos.ofFloored(next)).isIn(FluidTags.WATER);
             pos = next;
-            vel = vel.multiply(inWater ? 0.8 : 0.99).subtract(0.0, 0.03, 0.0);
         }
         return null;
     }

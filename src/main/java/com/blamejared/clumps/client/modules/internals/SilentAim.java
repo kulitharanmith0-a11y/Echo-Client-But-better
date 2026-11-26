@@ -156,17 +156,11 @@ public class SilentAim extends Module {
         }
     }
 
-    private static int[] steppedDirection(float playerYaw, float targetYaw, int forward, int strafe) {
-        int steps = Math.round(MathHelper.wrapDegrees(targetYaw - playerYaw) / 45.0F);
-        for (int index = 0; index < DIRECTIONS.length; index++) {
-            if (DIRECTIONS[index][0] == forward && DIRECTIONS[index][1] == strafe) {
-                return DIRECTIONS[Math.floorMod(index + steps, DIRECTIONS.length)];
-            }
-        }
-        return null;
+    static int[] steppedDirection(float playerYaw, float targetYaw, int forward, int strafe) {
+        return bestSyncedDirection(playerYaw, targetYaw, forward, strafe);
     }
 
-    private static int[] bestSyncedDirection(float playerYaw, float syncYaw, int forward, int strafe) {
+    static int[] bestSyncedDirection(float playerYaw, float syncYaw, int forward, int strafe) {
         double rawScale = (forward != 0 && strafe != 0) ? INV_SQRT_2 : 1.0;
         double rawForward = forward * rawScale;
         double rawStrafe = strafe * rawScale;
@@ -180,9 +174,16 @@ public class SilentAim extends Module {
         double syncSin = Math.sin(syncRad);
         double syncCos = Math.cos(syncRad);
 
+        // When the player is NOT pressing backward (S) and silent yaw is within normal forward combat arc (<= 67.5 deg),
+        // prevent pure A/D strafing from snapping into S+A / S+D (which causes continuous backward drift during A-D strafes).
+        boolean disallowBackwardSnap = forward >= 0 && Math.abs(MathHelper.wrapDegrees(syncYaw - playerYaw)) <= 67.5F;
+
         int[] best = null;
         double bestDot = -Double.MAX_VALUE;
         for (int[] candidate : DIRECTIONS) {
+            if (disallowBackwardSnap && candidate[0] < 0) {
+                continue;
+            }
             double scale = (candidate[0] != 0 && candidate[1] != 0) ? INV_SQRT_2 : 1.0;
             double cf = candidate[0] * scale;
             double cs = candidate[1] * scale;

@@ -48,13 +48,14 @@ public final class WeaponAttributes implements MinecraftAccess {
         return Math.min(ticksSinceEquipping, player.age - lastSwingTick);
     }
 
-    private static float projectedAttackDelayTicks(PlayerEntity player, ItemStack stack) {
-        if (player == null || stack == null || stack.isEmpty()) {
-            return 0.0F;
+    public static double projectedAttackSpeed(PlayerEntity player, ItemStack stack) {
+        if (player == null) {
+            return 4.0;
         }
         EntityAttributeInstance attackSpeed = player.getAttributeInstance(EntityAttributes.ATTACK_SPEED);
         if (attackSpeed == null) {
-            return player.getAttackCooldownProgressPerTick();
+            float perTick = player.getAttackCooldownProgressPerTick();
+            return perTick > 0.0F ? 20.0 / perTick : 4.0;
         }
         double[] additive = {0.0};
         double[] baseMultiplier = {0.0};
@@ -65,14 +66,23 @@ public final class WeaponAttributes implements MinecraftAccess {
             }
             accumulateModifier(modifier, additive, baseMultiplier, totalMultiplier);
         }
-        stack.applyAttributeModifiers(EquipmentSlot.MAINHAND, (attribute, modifier) -> {
-            if (attribute.equals(EntityAttributes.ATTACK_SPEED)) {
-                accumulateModifier(modifier, additive, baseMultiplier, totalMultiplier);
-            }
-        });
+        if (stack != null && !stack.isEmpty()) {
+            stack.applyAttributeModifiers(EquipmentSlot.MAINHAND, (attribute, modifier) -> {
+                if (attribute.equals(EntityAttributes.ATTACK_SPEED)) {
+                    accumulateModifier(modifier, additive, baseMultiplier, totalMultiplier);
+                }
+            });
+        }
         double projectedSpeed = (attackSpeed.getBaseValue() + additive[0])
                 * (1.0 + baseMultiplier[0]) * totalMultiplier[0];
-        projectedSpeed = EntityAttributes.ATTACK_SPEED.value().clamp(projectedSpeed);
+        return EntityAttributes.ATTACK_SPEED.value().clamp(projectedSpeed);
+    }
+
+    private static float projectedAttackDelayTicks(PlayerEntity player, ItemStack stack) {
+        if (player == null || stack == null || stack.isEmpty()) {
+            return 0.0F;
+        }
+        double projectedSpeed = projectedAttackSpeed(player, stack);
         if (projectedSpeed <= 0.0) {
             return 0.0F;
         }

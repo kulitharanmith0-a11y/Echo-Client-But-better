@@ -41,7 +41,11 @@ public final class ProfileStore {
     private final Path directory;
     private final Preferences preferences;
 
-    public record SaveRequest(String id, String name, String description, String visibility, String type, String data) { }
+    public record SaveRequest(String id, String name, String description, String visibility, String type, String data, String sourceId, String serverName, String serverIp) {
+        public SaveRequest(String id, String name, String description, String visibility, String type, String data) {
+            this(id, name, description, visibility, type, data, "", "", "");
+        }
+    }
 
     public ProfileStore(Path directory) {
         this.directory = Objects.requireNonNull(directory, "directory").toAbsolutePath().normalize();
@@ -66,7 +70,10 @@ public final class ProfileStore {
     }
 
     public JsonObject saveProfile(SaveRequest request) {
-        String[] arguments = request == null ? null : new String[]{request.id(), request.name(), request.description(), request.visibility(), request.type(), request.data()};
+        String[] arguments = request == null ? null : new String[]{
+            request.id(), request.name(), request.description(), request.visibility(), request.type(), request.data(),
+            request.sourceId(), request.serverName(), request.serverIp()
+        };
         return JsonParser.parseString(executeOperation("save_profile_json", arguments)).getAsJsonObject();
     }
 
@@ -129,12 +136,15 @@ public final class ProfileStore {
                 break;
             }
             case "save_profile_json": {
-                if (arguments == null || arguments.length != 6) {
+                if (arguments == null || (arguments.length != 6 && arguments.length != 9)) {
                     throw new IllegalArgumentException("Invalid config save arguments");
                 }
                 String id = argument(arguments, 0);
                 String name = argument(arguments, 1);
                 String data = argument(arguments, 5);
+                String sourceId = argument(arguments, 6);
+                String serverName = argument(arguments, 7);
+                String serverIp = argument(arguments, 8);
                 if (name.isBlank()) {
                     throw new IllegalArgumentException("Config name is required");
                 }
@@ -171,6 +181,15 @@ public final class ProfileStore {
                 config.addProperty("description", argument(arguments, 2));
                 config.addProperty("visibility", "public".equalsIgnoreCase(argument(arguments, 3)) ? "public" : "private");
                 config.addProperty("type", "rage".equalsIgnoreCase(argument(arguments, 4)) ? "rage" : "legit");
+                if (!sourceId.isEmpty()) {
+                    config.addProperty("sourceId", sourceId);
+                }
+                if (!serverName.isEmpty()) {
+                    config.addProperty("serverName", serverName);
+                }
+                if (!serverIp.isEmpty()) {
+                    config.addProperty("serverIp", serverIp);
+                }
                 config.addProperty("updatedAt", now);
                 if (!data.isEmpty()) {
                     profile.addProperty("data", data);

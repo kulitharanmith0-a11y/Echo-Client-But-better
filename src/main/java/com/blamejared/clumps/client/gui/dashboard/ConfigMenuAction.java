@@ -1,7 +1,7 @@
 package com.blamejared.clumps.client.gui.dashboard;
 
 public enum ConfigMenuAction {
-    EDIT("Edit details", false), ADD_COPY("Add another copy", false), PUBLISH("Publish", false), UPDATE_PUBLIC("Update public", false), GET_UPDATE("Get update", false), UNPUBLISH("Unpublish", false), DELETE("Delete", true);
+    EDIT("Edit details", false), COPY_CODE("Copy share code", false), ADD_COPY("Add another copy", false), PUBLISH("Publish", false), UPDATE_PUBLIC("Update public", false), GET_UPDATE("Get update", false), UNPUBLISH("Unpublish", false), DELETE("Delete", true);
 
     private static final String CONFIRM_UNPUBLISH = "Click to unpublish";
     private static final String CONFIRM_REPLACE = "Click to replace";

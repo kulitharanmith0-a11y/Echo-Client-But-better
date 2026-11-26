@@ -49,23 +49,26 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
 public class PearlCatch extends Module {
     private static final double LAUNCH_HEIGHT_OFFSET = 0.1;
-    private static final double SPAWN_MATCH_DISTANCE = 1.5;
+    private static final double SPAWN_MATCH_DISTANCE = 4.5;
     private static final double REQUIRED_HIT_FRACTION = 0.72;
-    private static final double RELAXED_HIT_FRACTION = 0.50;
+    private static final double RELAXED_HIT_FRACTION = 0.45;
     private static final double LAST_CHANCE_HIT_FRACTION = 0.25;
     private static final int SPAWN_RECONCILE_WAIT_TICKS = 2;
+    private static final int LEGIT_RECONCILE_WAIT_TICKS = 1;
     private static final int AIM_WAIT_TICKS = 8;
     private static final int RETRY_DELAY_TICKS = 10;
     private static final int MAX_RETRIES = 2;
     private static final int CONFIRM_GRACE_TICKS = 3;
-    private static final float MIN_AIM_SPEED = 50.0F;
-    private static final float MAX_AIM_SPEED = 420.0F;
+    private static final float MIN_AIM_SPEED = 90.0F;
+    private static final float MAX_AIM_SPEED = 720.0F;
     private static final float IMMEDIATE_AIM_SPEED = 1000.0F;
-    private static final double VISIBLE_AIM_TOLERANCE = 0.06;
+    private static final double VISIBLE_AIM_TOLERANCE = 0.14;
+    private static final float VISIBLE_ANGLE_FALLBACK_DEGREES = 2.5F;
     private static final double AIM_DISTANCE = 100.0;
     private static final String HIGH_DELAY_TOOLTIP = "Timing";
     private static final String LEGIT_TOOLTIP = "Legit Mode";
@@ -171,7 +174,7 @@ public class PearlCatch extends Module {
         legitMode.tooltip(LEGIT_TOOLTIP);
         legitDelay.tooltip(LEGIT_TOOLTIP);
         legitAutoAim.tooltip(LEGIT_TOOLTIP);
-        legitMode.description(CatalogText.literal("Hold Right Click while holding an Ender Pearl to throw the pearl then automatically throw a Wind Charge to catch it"));
+        legitMode.description(CatalogText.literal("Automatically throws a Wind Charge to catch your Ender Pearl when you right-click an Ender Pearl"));
         legitDelay.description(CatalogText.literal("Ticks after throwing the pearl before throwing the Wind Charge in Legit Mode"));
         legitAutoAim.description(CatalogText.literal("Smoothly aims visibly onto the pearl before throwing the Wind Charge in Legit Mode"));
     }
@@ -182,9 +185,6 @@ public class PearlCatch extends Module {
         boolean useHeld = isUseKeyHeld();
         if (!useHeld) {
             legitConsumedUntilRelease = false;
-            if (legitSequenceActive && normalStage == PearlCatchStage.WAIT) {
-                resetNormalSequence(switchBack.getValue());
-            }
         }
         handleKeyPresses();
         if (instantPhase != PearlCatchInstantPhase.IDLE) {
@@ -242,7 +242,6 @@ public class PearlCatch extends Module {
                 && !legitConsumedUntilRelease
                 && normalStage == PearlCatchStage.IDLE
                 && instantPhase == PearlCatchInstantPhase.IDLE
-                && isUseKeyHeld()
                 && client.currentScreen == null) {
             ItemStack used = interact.getHand() == Hand.OFF_HAND
                     ? client.player.getOffHandStack()
@@ -301,11 +300,18 @@ public class PearlCatch extends Module {
         if (isOutsideWorld() || !usesVisibleAim() || !needsCatchPlan() || activePlan == null) return;
         Vec3d target = client.player.getEyePos().add(
                 LaunchTrajectoryMath.direction(activePlan.yaw(), activePlan.pitch()).multiply(AIM_DISTANCE));
-        boolean immediate = !retryPending && scheduledCatchTick - pearlThrowTick <= 1
-                && scheduledCatchTick - client.player.age <= 1;
-        RotationSettings settings = immediate
-                ? RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.EASED, IMMEDIATE_AIM_SPEED)
-                : RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.NATURAL, aimSpeed());
+        int ticksRemaining = scheduledCatchTick - client.player.age;
+        boolean immediate = !retryPending && scheduledCatchTick - pearlThrowTick <= 1 && ticksRemaining <= 1;
+        boolean urgent = ticksRemaining <= 2;
+        RotationSettings settings;
+        if (immediate) {
+            settings = RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.EASED, IMMEDIATE_AIM_SPEED);
+        } else if (urgent) {
+            float speed = Math.max(aimSpeed(), 420.0F);
+            settings = RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.EASED, speed);
+        } else {
+            settings = RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.NATURAL, aimSpeed());
+        }
         rotations().aim(this, RotationPriority.HIGH, target, settings);
     }
 
@@ -358,6 +364,9 @@ public class PearlCatch extends Module {
         legitConsumedUntilRelease = true;
         normalStage = PearlCatchStage.WAIT;
         normalStageTicks = 0;
+        if (usesVisibleAim()) {
+            activePlan = planForTick(scheduledCatchTick);
+        }
     }
 
     @Override
@@ -426,6 +435,9 @@ public class PearlCatch extends Module {
         pearlThrowTick = client.player.age;
         scheduledCatchTick = pearlThrowTick + catchDelayTicks;
         normalStage = PearlCatchStage.WAIT;
+        if (usesVisibleAim()) {
+            activePlan = planForTick(scheduledCatchTick);
+        }
     }
 
     private void prepareCatchPlan() {
@@ -469,7 +481,7 @@ public class PearlCatch extends Module {
         if (plan == null) return null;
         double required = lastChance
                 ? LAST_CHANCE_HIT_FRACTION
-                : (lateTicks >= 3 ? RELAXED_HIT_FRACTION : REQUIRED_HIT_FRACTION);
+                : (lateTicks >= 2 ? RELAXED_HIT_FRACTION : REQUIRED_HIT_FRACTION);
         if (!usesVisibleAim()) {
             if (plan.hitFraction() < required) return null;
             return plan;
@@ -479,14 +491,23 @@ public class PearlCatch extends Module {
         double hitFraction = LaunchTrajectorySearch.hitFraction(trajectory, planningOrigin, planningVelocity, planningElapsedTicks, yaw, pitch, pearlFlightTicks - 1);
         double visibleRequired = lastChance
                 ? LAST_CHANCE_HIT_FRACTION
-                : Math.max(required, plan.hitFraction() - VISIBLE_AIM_TOLERANCE);
-        if (hitFraction < visibleRequired) return null;
-        return new LaunchCandidate(yaw, pitch, hitFraction, hitFraction, plan.meanHitTick());
+                : Math.min(required, Math.max(RELAXED_HIT_FRACTION, plan.hitFraction() - VISIBLE_AIM_TOLERANCE));
+        if (hitFraction >= visibleRequired) {
+            return new LaunchCandidate(yaw, pitch, hitFraction, hitFraction, plan.meanHitTick());
+        }
+        if (lateTicks >= 4 && hitFraction >= LAST_CHANCE_HIT_FRACTION) {
+            float yawError = Math.abs(MathHelper.wrapDegrees(plan.yaw() - yaw));
+            float pitchError = Math.abs(plan.pitch() - pitch);
+            if (yawError <= VISIBLE_ANGLE_FALLBACK_DEGREES && pitchError <= VISIBLE_ANGLE_FALLBACK_DEGREES) {
+                return new LaunchCandidate(yaw, pitch, hitFraction, hitFraction, plan.meanHitTick());
+            }
+        }
+        return null;
     }
 
     private void useWithPlan(LaunchCandidate plan) {
         if (!usesSilentAim()) {
-            actions().executeDoItemUse(this);
+            useIgnoringCrosshair();
             return;
         }
         rotations().override(this, RotationPriority.HIGH, new Rotation(plan.yaw(), plan.pitch()))
@@ -506,10 +527,9 @@ public class PearlCatch extends Module {
             throwWindCharge(slot, null);
             return;
         }
-        // On delayed/high catches, wait up to 2 ticks for exact server pearl velocity reconciliation
-        // so the solver uses the exact server spread instead of estimating.
+        int reconcileWait = (legitSequenceActive || catchDelayTicks <= 1) ? LEGIT_RECONCILE_WAIT_TICKS : SPAWN_RECONCILE_WAIT_TICKS;
         if (!lowTrajectory && trajectory != null && !trajectory.exactVelocity()
-                && lateTicks < SPAWN_RECONCILE_WAIT_TICKS
+                && lateTicks < reconcileWait
                 && (client.player.age - pearlThrowTick) < Math.max(4, pearlFlightTicks - 4)) {
             return;
         }

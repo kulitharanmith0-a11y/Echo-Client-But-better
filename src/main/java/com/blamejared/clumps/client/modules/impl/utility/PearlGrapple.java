@@ -58,8 +58,9 @@ import net.minecraft.util.math.Vec3d;
 public class PearlGrapple extends Module {
     private static final double EYE_OFFSET = 0.1;
     private static final float MAX_TARGET_DISTANCE = 48.0f;
-    private static final double REQUIRED_HIT_FRACTION = 0.5;
-    private static final double MANUAL_HIT_TOLERANCE = 0.15;
+    private static final double REQUIRED_HIT_FRACTION = 0.62;
+    private static final double FORCED_MIN_HIT_FRACTION = 0.35;
+    private static final double MANUAL_HIT_TOLERANCE = 0.12;
     private static final int AIM_WAIT_TICKS = 10;
     private static final double AIM_POINT_DISTANCE = 100.0;
     private static final float MIN_ROTATION_SPEED = 180.0f;
@@ -517,12 +518,12 @@ public class PearlGrapple extends Module {
             float yaw = client.player.getYaw();
             float pitch = client.player.getPitch();
             double fraction = MovingTargetTrajectorySearch.hitFraction(targetPath, yaw, pitch);
-            double required = force ? 0.0 : Math.min(REQUIRED_HIT_FRACTION, bestLaunch.hitFraction() - MANUAL_HIT_TOLERANCE);
+            double required = force ? FORCED_MIN_HIT_FRACTION : Math.min(REQUIRED_HIT_FRACTION, bestLaunch.hitFraction() - MANUAL_HIT_TOLERANCE);
             if (fraction <= 0.0 || fraction < required) return null;
             launch = new MovingTargetLaunch(yaw, pitch, fraction, bestLaunch.meanHitTick());
         }
         if (requiresRobustPrediction()) return remainsReliableWhenPerturbed(launch) ? launch : null;
-        if (!(launch.hitFraction() >= REQUIRED_HIT_FRACTION) && !force) return null;
+        if (launch.hitFraction() < (force ? FORCED_MIN_HIT_FRACTION : REQUIRED_HIT_FRACTION)) return null;
         return launch;
     }
 
@@ -610,8 +611,8 @@ public class PearlGrapple extends Module {
         Vec3d point = client.player.getEyePos().add(Vec3d.fromPolar(activeLaunch.pitch(), activeLaunch.yaw()).multiply(AIM_POINT_DISTANCE));
         float yawDelta = Math.abs(MathHelper.wrapDegrees(activeLaunch.yaw() - client.player.getYaw()));
         float pitchDelta = Math.abs(activeLaunch.pitch() - client.player.getPitch());
-        float speed = MathHelper.clamp(Math.max(yawDelta, pitchDelta) / 0.1f, MIN_ROTATION_SPEED, MAX_ROTATION_SPEED);
-        rotations().aim(this, RotationPriority.HIGH, point, RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.NATURAL, speed));
+        float speed = MathHelper.clamp(Math.max(yawDelta, pitchDelta) / 0.06f, MIN_ROTATION_SPEED, MAX_ROTATION_SPEED);
+        rotations().aim(this, RotationPriority.HIGH, point, RotationSettings.uniform(RotationVisibility.VISIBLE, AimTransition.EASED, speed));
     }
 
     @Subscribe

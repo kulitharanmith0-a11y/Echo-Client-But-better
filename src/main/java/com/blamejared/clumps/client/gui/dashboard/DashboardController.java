@@ -1,6 +1,7 @@
 package com.blamejared.clumps.client.gui.dashboard;
 
 import com.blamejared.clumps.client.ClumpsClient;
+import com.blamejared.clumps.client.config.CloudConfigCatalog;
 import com.blamejared.clumps.client.config.NameRegistry;
 import com.blamejared.clumps.client.config.StoreMeta;
 import com.blamejared.clumps.client.config.AssignmentResult;
@@ -9,6 +10,7 @@ import com.blamejared.clumps.client.event.render.HudRenderEvent;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.modules.ModuleCategory;
 import com.blamejared.clumps.client.modules.ModuleManager;
+import com.blamejared.clumps.client.modules.internals.ClickGui;
 import com.blamejared.clumps.client.modules.internals.Targets;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.render.ui.UiRenderer;
@@ -148,6 +150,12 @@ public final class DashboardController {
     private static final String SINGLEPLAYER_LABEL = "Singleplayer";
     private static final String AUTO_CONFIGS_LABEL = "Auto Config";
     private static final String CONFIGS_AUTO_INPUT_ID = "configs/autoconfig";
+    private static final String IMPORT_CODE_LABEL = "Import Code";
+    private static final String CONFIGS_IMPORT_INPUT_ID = "configs/import-code";
+    private static final String REFRESH_CLOUD_LABEL = "Refresh";
+    private static final String SYNCING_CLOUD_LABEL = "Syncing...";
+    private static final String CONFIGS_CLOUD_REFRESH_INPUT_ID = "configs/cloud-refresh";
+    private static final String CODE_COPIED_STATUS = "Code copied!";
     private static final String MONTHS_AGO_SUFFIX = "mo ago";
     private static final String WEEKS_AGO_SUFFIX = "w ago";
     private static final String DAYS_AGO_SUFFIX = "d ago";
@@ -418,6 +426,8 @@ public final class DashboardController {
     private String copiesSourceName;
     private float copiesFilterWidth;
     private float configScroll;
+    private String importCodeFeedback = "";
+    private long importCodeFeedbackUntilMs;
     private final List<ScriptCard> scriptCards;
     private final List<SettingRow> settingRows;
     private final List<SettingSectionLayout> settingSections;
@@ -746,10 +756,10 @@ public final class DashboardController {
         backdrop = renderer.fullResolutionBackdrop;
 
         float backgroundProgress = Math.min(1.0f, progress(openedAtNanos, 160));
-        if (renderer.halfResolutionBackdrop != null) {
+        if (renderer.halfResolutionBackdrop != null && ClickGui.backgroundBlurEnabled()) {
             renderer.drawBackdrop(renderer.halfResolutionBackdrop, 0.0f, 0.0f, width, height, 0.0f, backgroundProgress * closingOpacity);
         }
-        renderer.drawRoundedRect(0.0f, 0.0f, width, height, 0.0f, DashboardColors.multiplyAlpha(0x8c000000, backgroundProgress * closingOpacity));
+        renderer.drawRoundedRect(0.0f, 0.0f, width, height, 0.0f, DashboardColors.multiplyAlpha(ClickGui.backgroundDimArgb(), backgroundProgress * closingOpacity));
 
         float sidebarProgress = easedProgress(openedAtNanos, 220);
         localOffsetY = 4.0f * (1.0f - sidebarProgress);
@@ -820,7 +830,12 @@ public final class DashboardController {
         return (int) Math.ceil(MinecraftClient.getInstance().getWindow().getFramebufferHeight() / 2.0);
     }
     private void updateCanvas() {
-        canvas = LayoutMetrics.fit(guiWidth(), guiHeight(), 1920.0f, 1080.0f);
+        float sw = guiWidth();
+        float sh = guiHeight();
+        LayoutMetrics base = LayoutMetrics.fit(sw, sh, 1920.0f, 1080.0f);
+        float scaled = base.scale() * ClickGui.uiScaleFactor();
+        canvas = new LayoutMetrics(1920.0f, 1080.0f, sw, sh, scaled,
+                (sw - 1920.0f * scaled) * 0.5f, (sh - 1080.0f * scaled) * 0.5f);
         viewportScale = canvas.scale();
         viewportLeft = canvas.offsetX();
         viewportTop = canvas.offsetY();
@@ -872,8 +887,9 @@ public final class DashboardController {
     
     private void renderSidebar(UiRenderer renderer) {
         painter(renderer).backdropPanel(30.0f, 30.0f, 270.0f, 1020.0f, 12.0f, -653521908, 0.0f, 0);
-        painter(renderer).roundedIcon(DashboardIcon.SIDEBAR_GLOW, 30.0f, 30.0f, 270.0f, 80.0f, 12.0f, 1.0f, -1);
-        painter(renderer).icon(DashboardIcon.LOGO, 143.0f, 48.0f, 44.0f, 44.0f, 1.0f, -1);
+        int glowTint = ClickGui.isDefaultObsidianTheme() ? -1 : ClickGui.accentArgb();
+        painter(renderer).roundedIcon(DashboardIcon.SIDEBAR_GLOW, 30.0f, 30.0f, 270.0f, 80.0f, 12.0f, 1.0f, glowTint);
+        painter(renderer).icon(DashboardIcon.LOGO, 143.0f, 48.0f, 44.0f, 44.0f, 1.0f, glowTint);
         float opacity = Math.max(0.0f, Math.min(1.0f, openingOpacity * layerOpacity));
         renderer.drawRoundedRect(renderX(30.0f), renderY(110.0f), renderSize(270.0f), renderSize(940.0f), renderSize(6.0f), renderSize(6.0f), renderSize(12.0f), renderSize(12.0f), DashboardColors.multiplyAlpha(100663295, opacity), renderSize(1.0f), DashboardColors.multiplyAlpha(452984831, opacity));
         painter(renderer).text(FontAsset.INTER_SEMI_BOLD, CATEGORIES_LABEL, 42.0f, 122.0f, 11.0f, -2130706433);
@@ -892,7 +908,8 @@ public final class DashboardController {
             layerOpacity *= row.visibility();
             painter(renderer).text(FontAsset.INTER, row.Module().getName(), 63.0f, row.y() + 8.0f, 14.0f, selected ? -1 : DashboardColors.interpolate(1090519039, -1275068417, enabled));
             if (selected) {
-                painter(renderer).roundedRect(270.0f, sidebarIndicatorY, 6.0f, 6.0f, 3.0f, DashboardColors.multiplyAlpha(-1, row.visibility()));
+                int dotColor = ClickGui.isDefaultObsidianTheme() ? -1 : ClickGui.accentArgb();
+                painter(renderer).roundedRect(270.0f, sidebarIndicatorY, 6.0f, 6.0f, 3.0f, DashboardColors.multiplyAlpha(dotColor, row.visibility()));
             }
             layerOpacity = previousOpacity;
         }
@@ -1193,6 +1210,24 @@ public final class DashboardController {
         }
         painter(renderer).text(FontAsset.INTER, AUTO_CONFIGS_LABEL,
                 autoEnabled ? 580.0f : 576.0f, 123.0f, 13.0f, autoConfigTabActive ? -1 : -637534209);
+        boolean importHovered = containsPointer(690.0f, 112.0f, 114.0f, 37.0f);
+        boolean feedbackActive = !importCodeFeedback.isEmpty() && System.currentTimeMillis() < importCodeFeedbackUntilMs;
+        String importLabel = feedbackActive ? importCodeFeedback : IMPORT_CODE_LABEL;
+        painter(renderer).panel(690.0f, 112.0f, 114.0f, 37.0f, 8.0f,
+                feedbackActive ? 268435455 : importHovered ? 234881023 : 184549375,
+                1.0f, feedbackActive ? 872415231 : importHovered ? 536870911 : 268435455);
+        float importTextX = 690.0f + (114.0f - painter(renderer).textWidth(FontAsset.INTER, importLabel, 13.0f)) * 0.5f;
+        painter(renderer).text(FontAsset.INTER, importLabel, importTextX, 123.0f, 13.0f, feedbackActive || importHovered ? -1 : -637534209);
+        if (browsePublicConfigs && !autoConfigTabActive) {
+            boolean refreshing = CloudConfigCatalog.isRefreshing();
+            boolean refreshHovered = containsPointer(816.0f, 112.0f, 92.0f, 37.0f);
+            String refreshLabel = refreshing ? SYNCING_CLOUD_LABEL : REFRESH_CLOUD_LABEL;
+            painter(renderer).panel(816.0f, 112.0f, 92.0f, 37.0f, 8.0f,
+                    refreshHovered ? 234881023 : 184549375,
+                    1.0f, refreshHovered ? 536870911 : 268435455);
+            float refreshTextX = 816.0f + (92.0f - painter(renderer).textWidth(FontAsset.INTER, refreshLabel, 13.0f)) * 0.5f;
+            painter(renderer).text(FontAsset.INTER, refreshLabel, refreshTextX, 123.0f, 13.0f, refreshHovered ? -1 : -637534209);
+        }
         if (autoConfigTabActive) {
             DashboardTransform transform = new DashboardTransform(viewportLeft, viewportTop, viewportScale, zoom, animationScale, pivotX, pivotY, localOffsetX, localOffsetY, verticalOffset);
             autoConfigView.render(renderer, painter(renderer), transform, mouseX, mouseY);
@@ -1210,10 +1245,10 @@ public final class DashboardController {
         if (copiesSourceId != null) {
             String label = COPIES_OF_PREFIX + copiesSourceName;
             copiesFilterWidth = painter(renderer).textWidth(FontAsset.INTER, label, 13.0f) + 50.0f;
-            boolean hovered = containsPointer(690.0f, 112.0f, copiesFilterWidth, 37.0f);
-            painter(renderer).panel(690.0f, 112.0f, copiesFilterWidth, 37.0f, 8.0f, 184549375, 1.0f, hovered ? 872415231 : 268435455);
-            painter(renderer).text(FontAsset.INTER, label, 704.0f, 123.0f, 13.0f, -637534209);
-            drawGlyph(renderer, 57778, 690.0f + copiesFilterWidth - 28.0f, 122.0f, 14.0f, hovered ? -1 : -2130706433);
+            boolean hovered = containsPointer(816.0f, 112.0f, copiesFilterWidth, 37.0f);
+            painter(renderer).panel(816.0f, 112.0f, copiesFilterWidth, 37.0f, 8.0f, 184549375, 1.0f, hovered ? 872415231 : 268435455);
+            painter(renderer).text(FontAsset.INTER, label, 830.0f, 123.0f, 13.0f, -637534209);
+            drawGlyph(renderer, 57778, 816.0f + copiesFilterWidth - 28.0f, 122.0f, 14.0f, hovered ? -1 : -2130706433);
         }
         configScroll = Math.max(0.0f, Math.min(configScroll, maximumConfigScroll(cards.size())));
         renderer.pushScissor(renderX(330.0f), renderY(157.0f), renderSize(1560.0f), renderSize(885.0f));
@@ -2010,8 +2045,9 @@ public final class DashboardController {
         visual = Math.max(0.0f, Math.min(1.0f, visual));
         painter(renderer).roundedRect(x, y, width, height, 3.5f, 536870911);
         float thumb = DashboardLayout.sliderThumbCenter(x, width, 16.0f, visual);
-        painter(renderer).roundedRect(x, y, thumb - x, height, 3.5f, -4144960);
-        painter(renderer).roundedRect(thumb - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, -4144960);
+        int sliderAccent = ClickGui.isDefaultObsidianTheme() ? -4144960 : ClickGui.accentArgb();
+        painter(renderer).roundedRect(x, y, thumb - x, height, 3.5f, sliderAccent);
+        painter(renderer).roundedRect(thumb - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, sliderAccent);
     }
 
     private float[] rangeTextGeometry(FloatRangeSetting setting, float x) {
@@ -2046,9 +2082,10 @@ public final class DashboardController {
         painter(renderer).roundedRect(x, y, width, height, 3.5f, 536870911);
         float left = DashboardLayout.sliderThumbCenter(x, width, 16.0f, visualLower);
         float right = DashboardLayout.sliderThumbCenter(x, width, 16.0f, Math.max(visualLower, visualUpper));
-        painter(renderer).roundedRect(left, y, Math.max(0.0f, right - left), height, 3.5f, -4144960);
-        painter(renderer).roundedRect(left - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, -4144960);
-        painter(renderer).roundedRect(right - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, -4144960);
+        int sliderAccent = ClickGui.isDefaultObsidianTheme() ? -4144960 : ClickGui.accentArgb();
+        painter(renderer).roundedRect(left, y, Math.max(0.0f, right - left), height, 3.5f, sliderAccent);
+        painter(renderer).roundedRect(left - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, sliderAccent);
+        painter(renderer).roundedRect(right - 8.0f, y - 1.0f, 16.0f, 9.0f, 2.0f, sliderAccent);
     }
 
     private String settingKeyLabel(KeybindSetting setting) {
@@ -2837,8 +2874,10 @@ public final class DashboardController {
         float left = x + padding + thumbSize * 0.5f;
         float right = x + width - padding - thumbSize * 0.5f;
         float center = left + (right - left) * position;
-        painter(renderer).roundedRect(x, y, width, height, height * 0.5f, DashboardColors.interpolate(536870911, 1308622847, position));
-        painter(renderer).roundedRect(center - thumbWidth * 0.5f, y + (height - thumbSize) * 0.5f, thumbWidth, thumbSize, thumbSize * 0.5f, DashboardColors.interpolate(-2130706433, -4144960, position));
+        int activeTrack = ClickGui.isDefaultObsidianTheme() ? 1308622847 : DashboardColors.multiplyAlpha(ClickGui.accentArgb(), 0.52f);
+        int activeThumb = ClickGui.isDefaultObsidianTheme() ? -4144960 : ClickGui.accentArgb();
+        painter(renderer).roundedRect(x, y, width, height, height * 0.5f, DashboardColors.interpolate(536870911, activeTrack, position));
+        painter(renderer).roundedRect(center - thumbWidth * 0.5f, y + (height - thumbSize) * 0.5f, thumbWidth, thumbSize, thumbSize * 0.5f, DashboardColors.interpolate(-2130706433, activeThumb, position));
     }
 
     private void drawGlyph(UiRenderer renderer, int glyph, float x, float y, float size, int color) {
@@ -3940,6 +3979,7 @@ public final class DashboardController {
             if (!ui.interact(CONFIG_MENU_INPUT_PREFIX + action.name(), row).clicked()) continue;
             switch (action) {
                 case EDIT -> { closeContextMenu(); openConfigModal(ConfigModalMode.EDIT, card); }
+                case COPY_CODE -> { closeContextMenu(); copyConfigShareCode(card); }
                 case ADD_COPY -> { closeContextMenu(); openConfigModal(ConfigModalMode.COPY, card); }
                 case PUBLISH -> { closeContextMenu(); openConfigModal(ConfigModalMode.PUBLISH, card); }
                 case UPDATE_PUBLIC -> { closeContextMenu(); openConfigModal(ConfigModalMode.UPDATE, card); }
@@ -4077,7 +4117,10 @@ public final class DashboardController {
                     if (copy != null) acceptSelectedConfig(copy.id());
                 }
                 case PUBLISH, UPDATE -> {
-                    if (card != null) ClumpsClient.ModuleConfig.updatePublic(card.id, name, modalDescription, type, card.selected);
+                    if (card != null) {
+                        ClumpsClient.ModuleConfig.updatePublic(card.id, name, modalDescription, type, card.selected);
+                        copyConfigShareCode(card);
+                    }
                 }
             }
         }
@@ -4134,10 +4177,44 @@ public final class DashboardController {
         autoConfigTabActive = false;
         closeAutoConfigItemPicker();
         autoConfigView.resetOverlays();
+        if (browse) {
+            CloudConfigCatalog.refreshIfStaleAsync(this::requestRefresh);
+        }
         if (browsePublicConfigs == browse) return;
         browsePublicConfigs = browse;
         configScroll = 0.0f;
         pendingConfirmationId = null;
+    }
+
+    private void copyConfigShareCode(ConfigCard card) {
+        if (card == null || ClumpsClient.ModuleConfig == null) return;
+        String code = ClumpsClient.ModuleConfig.exportShareCode(card.id);
+        if (code == null || code.isBlank()) {
+            showConfigStatus(card.id, "Empty config");
+            return;
+        }
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc != null && mc.keyboard != null) {
+            mc.keyboard.setClipboard(code);
+        }
+        showConfigStatus(card.id, CODE_COPIED_STATUS);
+    }
+
+    private void importConfigFromClipboard() {
+        if (ClumpsClient.ModuleConfig == null) return;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        String clipboard = (mc != null && mc.keyboard != null) ? mc.keyboard.getClipboard() : "";
+        StoreMeta imported = ClumpsClient.ModuleConfig.importShareCode(clipboard);
+        if (imported != null) {
+            importCodeFeedback = "Imported!";
+            importCodeFeedbackUntilMs = System.currentTimeMillis() + 2500L;
+            selectConfigBrowseMode(false);
+            acceptSelectedConfig(imported.id());
+            requestRefresh();
+        } else {
+            importCodeFeedback = "Invalid code";
+            importCodeFeedbackUntilMs = System.currentTimeMillis() + 2500L;
+        }
     }
 
     private void openAutoConfigItemPicker(int customIndex) {
@@ -4186,6 +4263,13 @@ public final class DashboardController {
             copiesSourceId = null;
             pendingConfirmationId = null;
         }
+        if (ui.interact(CONFIGS_IMPORT_INPUT_ID, new UiRect(690.0f, 112.0f, 114.0f, 37.0f)).clicked()) {
+            importConfigFromClipboard();
+        }
+        if (browsePublicConfigs && !autoConfigTabActive
+                && ui.interact(CONFIGS_CLOUD_REFRESH_INPUT_ID, new UiRect(816.0f, 112.0f, 92.0f, 37.0f)).clicked()) {
+            CloudConfigCatalog.refreshAsync(this::requestRefresh);
+        }
         if (ui.interact(CONFIG_SEARCH_INPUT_ID, new UiRect(1606.0f, 58.0f, 260.0f, 34.0f)).clicked()) {
             textFocus = TextInputFocus.CONFIG_SEARCH;
         }
@@ -4193,7 +4277,7 @@ public final class DashboardController {
             autoConfigView.handleInput(ui, mouseX, mouseY, this::openAutoConfigItemPicker);
             return;
         }
-        if (copiesSourceId != null && ui.interact(CONFIG_SOURCE_FILTER_INPUT_ID, new UiRect(690.0f, 112.0f, copiesFilterWidth, 37.0f)).clicked()) {
+        if (copiesSourceId != null && ui.interact(CONFIG_SOURCE_FILTER_INPUT_ID, new UiRect(816.0f, 112.0f, copiesFilterWidth, 37.0f)).clicked()) {
             copiesSourceId = null;
             configScroll = 0.0f;
         }

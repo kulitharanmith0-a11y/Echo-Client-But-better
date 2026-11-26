@@ -48,7 +48,13 @@ public abstract class WindowMixin implements com.blamejared.clumps.client.platfo
 
     @Override
     public void invalidateFullscreenState() {
-        if (fullscreen || clumps$borderlessMonitor != 0L || (handle != 0L && GLFW.glfwGetWindowMonitor(handle) != 0L)) {
+        boolean exclusiveMonitor = handle != 0L && GLFW.glfwGetWindowMonitor(handle) != 0L;
+        if (exclusiveMonitor && ClumpsClient.externalRendererActive && !ClumpsClient.eventsDisabled) {
+            fullscreen = true;
+            currentFullscreen = false;
+            return;
+        }
+        if (fullscreen || clumps$borderlessMonitor != 0L || exclusiveMonitor) {
             currentFullscreen = false;
         }
     }

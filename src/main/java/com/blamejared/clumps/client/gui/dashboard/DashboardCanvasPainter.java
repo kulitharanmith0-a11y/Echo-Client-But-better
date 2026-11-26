@@ -1,5 +1,6 @@
 package com.blamejared.clumps.client.gui.dashboard;
 
+import com.blamejared.clumps.client.modules.internals.ClickGui;
 import com.blamejared.clumps.client.render.font.FontAsset;
 import com.blamejared.clumps.client.render.svg.SvgColorMode;
 import com.blamejared.clumps.client.render.ui.UiRenderer;
@@ -25,17 +26,23 @@ public final class DashboardCanvasPainter implements DashboardPainter {
 
     @Override
     public void backdropPanel(float x, float y, float width, float height, float radius, int fill, float borderWidth, int border) {
-        if (backdrop == null) {
+        int themedFill = ClickGui.tintPanelFill(fill);
+        int themedBorder = ClickGui.tintPanelBorder(border);
+        if (backdrop == null || !ClickGui.backgroundBlurEnabled()) {
             panel(x, y, width, height, radius, fill, borderWidth, border);
             return;
         }
-        renderer.drawBackdrop(backdrop, transform.renderX(x), transform.renderY(y), transform.renderSize(width), transform.renderSize(height), transform.renderSize(radius), opacity, true, fill);
-        if (borderWidth > 0.0f) panel(x, y, width, height, radius, 0, borderWidth, border);
+        renderer.drawBackdrop(backdrop, transform.renderX(x), transform.renderY(y), transform.renderSize(width), transform.renderSize(height), transform.renderSize(radius), opacity, true, themedFill);
+        if (borderWidth > 0.0f) {
+            renderer.drawRoundedRect(transform.renderX(x), transform.renderY(y), transform.renderSize(width), transform.renderSize(height), transform.renderSize(radius), 0, transform.renderSize(borderWidth), DashboardColors.multiplyAlpha(themedBorder, opacity));
+        }
     }
 
     @Override
     public void panel(float x, float y, float width, float height, float radius, int fill, float borderWidth, int border) {
-        renderer.drawRoundedRect(transform.renderX(x), transform.renderY(y), transform.renderSize(width), transform.renderSize(height), transform.renderSize(radius), DashboardColors.multiplyAlpha(fill, opacity), transform.renderSize(borderWidth), DashboardColors.multiplyAlpha(border, opacity));
+        int themedFill = ClickGui.tintPanelFill(fill);
+        int themedBorder = ClickGui.tintPanelBorder(border);
+        renderer.drawRoundedRect(transform.renderX(x), transform.renderY(y), transform.renderSize(width), transform.renderSize(height), transform.renderSize(radius), DashboardColors.multiplyAlpha(themedFill, opacity), transform.renderSize(borderWidth), DashboardColors.multiplyAlpha(themedBorder, opacity));
     }
 
     @Override

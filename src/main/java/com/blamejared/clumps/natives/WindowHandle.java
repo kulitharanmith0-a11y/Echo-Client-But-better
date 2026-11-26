@@ -25,6 +25,9 @@ import org.lwjgl.system.windows.User32;
 public final class WindowHandle implements WindowBackend {
     private static final int EXCLUDE_FROM_CAPTURE = 0x11;
     private static final int MONITOR_CAPTURE = 0x01;
+    // Use 254 instead of 255 so Windows DWM always composites the overlay through its layered tree
+    // and never promotes a fullscreen-sized OpenGL overlay to DirectFlip/MPO (which bypasses display affinity).
+    private static final int OVERLAY_VISIBLE_ALPHA = 254;
     private static final int GW_HWNDPREV = 3;
     private static final long HWND_NOTOPMOST = -2L;
     private static final long WINDOW_ABOVE = 1L;
@@ -56,6 +59,7 @@ public final class WindowHandle implements WindowBackend {
     private boolean shownForReveal;
     private boolean revealedOpaque;
     private boolean captureFailed;
+    private boolean geometryChangedSinceVerify;
     private int appliedAffinity = EXCLUDE_FROM_CAPTURE;
     private int currentAlpha = -1;
     private boolean lastMainFocused;
@@ -175,6 +179,21 @@ public final class WindowHandle implements WindowBackend {
             return false;
         }
         if (visible && revealedOpaque) {
+            if (geometryChangedSinceVerify && Platform.get() == Platform.WINDOWS) {
+                geometryChangedSinceVerify = false;
+                long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
+                if (overlay != 0L) {
+                    configureWindowStyles();
+                    attachToMainWindow();
+                    if (!configureAndVerifyCaptureSharing()) {
+                        captureFailed = true;
+                        setVisible(false);
+                        return false;
+                    }
+                    setOverlayAlpha(overlay, OVERLAY_VISIBLE_ALPHA);
+                    flushDwm();
+                }
+            }
             if (!ensureCaptureProtected()) {
                 captureFailed = true;
                 setVisible(false);
@@ -287,6 +306,9 @@ public final class WindowHandle implements WindowBackend {
                 return;
             }
             boolean changed = targetX != x || targetY != y || targetWidth != width || targetHeight != height;
+            if (changed) {
+                geometryChangedSinceVerify = true;
+            }
             x = targetX;
             y = targetY;
             width = targetWidth;
@@ -349,6 +371,9 @@ public final class WindowHandle implements WindowBackend {
                 return;
             }
             boolean changed = targetX != x || targetY != y || targetWidth != width || targetHeight != height;
+            if (changed) {
+                geometryChangedSinceVerify = true;
+            }
             x = targetX;
             y = targetY;
             width = targetWidth;
@@ -381,7 +406,7 @@ public final class WindowHandle implements WindowBackend {
                         setVisible(false);
                         return;
                     }
-                    setOverlayAlpha(overlay, 255);
+                    setOverlayAlpha(overlay, OVERLAY_VISIBLE_ALPHA);
                     flushDwm();
                 }
                 revealedOpaque = true;
@@ -453,7 +478,7 @@ public final class WindowHandle implements WindowBackend {
             setWindowLongPtr(overlay, User32.GWL_EXSTYLE, desired);
             currentAlpha = -1;
         }
-        setOverlayAlpha(overlay, revealedOpaque ? 255 : 0);
+        setOverlayAlpha(overlay, revealedOpaque ? OVERLAY_VISIBLE_ALPHA : 0);
     }
 
     private void setOverlayAlpha(long overlay, int alpha) {
@@ -582,7 +607,7 @@ public final class WindowHandle implements WindowBackend {
                     return false;
                 }
                 flushDwm();
-                setOverlayAlpha(overlay, 255);
+                setOverlayAlpha(overlay, OVERLAY_VISIBLE_ALPHA);
                 revealedOpaque = true;
                 return true;
             }

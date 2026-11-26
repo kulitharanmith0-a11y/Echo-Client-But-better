@@ -14,8 +14,40 @@ public final class TriggerBotTiming {
     public static final double MIN_VANILLA_CRIT_COOLDOWN = 0.901;
     public static final int MAX_PING_HURT_LEAD_TICKS = 2;
     public static final long TARGET_GRACE_MILLIS = 150L;
+    public static final double BASE_ATTACK_SPEED = 4.0;
 
     private TriggerBotTiming() {
+    }
+
+    public static float cooldownTicksForAttackSpeed(double attackSpeed) {
+        double safeSpeed = Math.max(0.1, Double.isFinite(attackSpeed) ? attackSpeed : BASE_ATTACK_SPEED);
+        return (float) (20.0 / safeSpeed);
+    }
+
+    public static float effectiveSwapAwareProgress(
+            float vanillaProgress,
+            long currentTick,
+            long lastSwapTick,
+            double heldItemAttackSpeed) {
+        float clampedVanilla = Math.max(0.0F, Math.min(1.0F, vanillaProgress));
+        if (lastSwapTick < 0L || currentTick < lastSwapTick) {
+            return clampedVanilla;
+        }
+        long ticksSinceSwap = currentTick - lastSwapTick;
+        float cooldownTicks = cooldownTicksForAttackSpeed(heldItemAttackSpeed);
+        if ((float) ticksSinceSwap >= cooldownTicks + 2.0F) {
+            return clampedVanilla;
+        }
+        float swapProgress = Math.max(0.0F, Math.min(1.0F, ((float) ticksSinceSwap + 0.5F) / cooldownTicks));
+        return Math.min(clampedVanilla, swapProgress);
+    }
+
+    public static boolean shouldMissAttack(float missChancePercent, float randomUnitSample) {
+        if (missChancePercent <= 0.0F) {
+            return false;
+        }
+        float threshold = Math.max(0.0F, Math.min(1.0F, missChancePercent / 100.0F));
+        return randomUnitSample < threshold;
     }
 
     public static boolean isWithinRange(double squaredDistance, float boundA, float boundB) {

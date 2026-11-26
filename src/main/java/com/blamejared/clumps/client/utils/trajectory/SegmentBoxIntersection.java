@@ -5,6 +5,11 @@ public final class SegmentBoxIntersection {
     }
 
     public static boolean intersects(double x, double y, double z, double deltaX, double deltaY, double deltaZ, double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+        if (x >= minX - 1.0E-7 && x <= maxX + 1.0E-7
+                && y >= minY - 1.0E-7 && y <= maxY + 1.0E-7
+                && z >= minZ - 1.0E-7 && z <= maxZ + 1.0E-7) {
+            return true;
+        }
         if (deltaX > 1.0E-7 && crossesFace(minX - x, deltaX, y, deltaY, z, deltaZ, minY, maxY, minZ, maxZ)) {
             return true;
         }

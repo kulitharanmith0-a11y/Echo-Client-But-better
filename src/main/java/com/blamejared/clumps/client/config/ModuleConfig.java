@@ -221,6 +221,16 @@ public final class ModuleConfig implements AutoCloseable {
     }
 
     
+    public boolean loadSnapshotPreservingFriends(String data) {
+        skipFriendsOnApply = true;
+        try {
+            return loadSnapshot(data);
+        } finally {
+            skipFriendsOnApply = false;
+        }
+    }
+
+    
     public boolean load(String name) {
         if (!io.isAvailable()) {
             return false;
@@ -234,6 +244,10 @@ public final class ModuleConfig implements AutoCloseable {
 
     
     public boolean loadById(String id) {
+        if (CloudConfigCatalog.isCloudId(id)) {
+            CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(id);
+            return entry != null && loadSnapshotPreservingFriends(entry.dataJson());
+        }
         JsonObject response = io.getProfile(id == null ? "" : id);
         if (!ProfileCodec.isSuccessful(response)) {
             return false;
@@ -295,6 +309,18 @@ public final class ModuleConfig implements AutoCloseable {
         if (clientState.writesDisabled() || id == null || id.isBlank() || !io.isAvailable()) {
             return null;
         }
+        if (CloudConfigCatalog.isCloudId(id)) {
+            CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(id);
+            if (entry == null) {
+                return null;
+            }
+            StoreMeta saved = catalog.save("", name, description, false, type == null ? entry.meta().type() : type,
+                    entry.dataJson(), entry.meta().id(), entry.meta().serverName(), entry.meta().serverIp());
+            if (saved == null) {
+                return null;
+            }
+            return selectLocalAndApply(saved.id(), true);
+        }
         return applyProfileResponse(io.saveProfile(new ProfileStore.SaveRequest(id, name, description, "PRIVATE", type == null ? "GHOST" : type, "")));
     }
 
@@ -302,6 +328,23 @@ public final class ModuleConfig implements AutoCloseable {
     public StoreMeta selectById(String id) {
         if (!io.isAvailable()) {
             return null;
+        }
+        if (CloudConfigCatalog.isCloudId(id)) {
+            CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(id);
+            if (entry == null) {
+                return null;
+            }
+            if (clientState.writesDisabled()) {
+                loadSnapshotPreservingFriends(entry.dataJson());
+                return entry.meta();
+            }
+            String localName = uniqueLocalName(entry.meta().name());
+            StoreMeta saved = catalog.save("", localName, entry.meta().description(), false, entry.meta().type(),
+                    entry.dataJson(), entry.meta().id(), entry.meta().serverName(), entry.meta().serverIp());
+            if (saved == null) {
+                return null;
+            }
+            return selectLocalAndApply(saved.id(), true);
         }
         return applyProfileResponse(io.selectProfile(id == null ? "" : id));
     }
@@ -311,12 +354,117 @@ public final class ModuleConfig implements AutoCloseable {
         if (!io.isAvailable()) {
             return null;
         }
+        if (CloudConfigCatalog.isCloudId(preferredId)) {
+            CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(preferredId);
+            if (entry != null && !clientState.writesDisabled() && selectedId != null && !selectedId.isBlank()) {
+                JsonObject existingResp = io.getProfile(selectedId);
+                JsonObject existingMeta = ProfileCodec.objectField(existingResp, "config");
+                String name = existingMeta != null ? ProfileCodec.textField(existingMeta, "name", entry.meta().name()) : entry.meta().name();
+                String desc = existingMeta != null ? ProfileCodec.textField(existingMeta, "description", entry.meta().description()) : entry.meta().description();
+                String type = existingMeta != null ? ProfileCodec.textField(existingMeta, "type", entry.meta().type()) : entry.meta().type();
+                StoreMeta updated = catalog.save(selectedId, name, desc, false, type, entry.dataJson(),
+                        entry.meta().id(), entry.meta().serverName(), entry.meta().serverIp());
+                if (updated != null) {
+                    return selectLocalAndApply(updated.id(), true);
+                }
+            }
+            return selectById(selectedId);
+        }
         JsonObject first = io.selectProfile(selectedId == null ? "" : selectedId);
         if (!ProfileCodec.isSuccessful(first)) {
             return null;
         }
         StoreMeta preferred = selectById(preferredId);
         return preferred != null ? preferred : applyProfileResponse(first);
+    }
+
+    public String exportShareCode(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        if (CloudConfigCatalog.isCloudId(id)) {
+            CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(id);
+            if (entry == null) {
+                return null;
+            }
+            StoreMeta m = entry.meta();
+            return CloudConfigCatalog.encodeShareCode(m.name(), m.description(), m.type(), m.author(), entry.dataJson());
+        }
+        if (!io.isAvailable()) {
+            return null;
+        }
+        JsonObject response = io.getProfile(id);
+        if (!ProfileCodec.isSuccessful(response)) {
+            return null;
+        }
+        JsonObject config = ProfileCodec.objectField(response, "config");
+        String name = config == null ? "Shared Config" : ProfileCodec.textField(config, "name", "Shared Config");
+        String desc = config == null ? "" : ProfileCodec.textField(config, "description");
+        String type = config == null ? "GHOST" : ProfileCodec.textField(config, "type", "GHOST");
+        String author = config == null ? "Player" : ProfileCodec.textField(config, "author", "Player");
+        String data = ProfileCodec.textField(response, "data");
+        if (data.isBlank() || "{}".equals(data.trim())) {
+            if (id.equals(catalog.activeConfigId())) {
+                data = serialize();
+            } else {
+                return null;
+            }
+        }
+        return CloudConfigCatalog.encodeShareCode(name, desc, type, author, data);
+    }
+
+    public StoreMeta importShareCode(String rawInput) {
+        if (clientState.writesDisabled() || !io.isAvailable()) {
+            return null;
+        }
+        CloudConfigCatalog.DecodedShare decoded = CloudConfigCatalog.decodeShareCode(rawInput);
+        if (decoded == null) {
+            return null;
+        }
+        String localName = uniqueLocalName(decoded.name());
+        StoreMeta saved = catalog.save("", localName, decoded.description(), false, decoded.type(), decoded.dataJson());
+        if (saved == null) {
+            return null;
+        }
+        return selectLocalAndApply(saved.id(), true);
+    }
+
+    private StoreMeta selectLocalAndApply(String id, boolean preserveFriends) {
+        JsonObject response = io.selectProfile(id == null ? "" : id);
+        if (!ProfileCodec.isSuccessful(response)) {
+            return null;
+        }
+        catalog.acceptActiveConfigId(ProfileCodec.textField(response, "activeConfigId"));
+        String data = ProfileCodec.textField(response, "data");
+        if (!data.isBlank()) {
+            if (preserveFriends) {
+                loadSnapshotPreservingFriends(data);
+            } else {
+                loadSnapshot(data);
+            }
+        }
+        JsonObject config = ProfileCodec.objectField(response, "config");
+        return config == null ? null : ProfileCodec.metadata(config);
+    }
+
+    private String uniqueLocalName(String baseName) {
+        String clean = (baseName == null || baseName.isBlank()) ? "Config" : baseName.trim();
+        List<StoreMeta> existing = catalog.refresh();
+        String candidate = clean;
+        int suffix = 2;
+        while (hasLocalName(existing, candidate)) {
+            candidate = clean + " (" + suffix++ + ")";
+        }
+        return candidate;
+    }
+
+    private static boolean hasLocalName(List<StoreMeta> profiles, String candidate) {
+        for (StoreMeta meta : profiles) {
+            if (!meta.publicVisibility() && candidate.equalsIgnoreCase(meta.name())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     

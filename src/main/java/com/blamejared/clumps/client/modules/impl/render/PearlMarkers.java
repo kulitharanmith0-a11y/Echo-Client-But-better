@@ -174,10 +174,11 @@ public class PearlMarkers extends Module {
     private LandingPrediction simulateLanding(Entity entity, float tickDelta, boolean isPearl) {
         Vec3d pos = entity.getLerpedPos(tickDelta);
         Vec3d vel = entity.getVelocity();
-        double drag = isPearl ? 0.99 : 0.95;
+        double drag = isPearl ? 0.99 : 1.0;
         double gravity = isPearl ? 0.03 : 0.0;
 
         for (int tick = 1; tick <= MAX_SIM_TICKS; tick++) {
+            vel = new Vec3d(vel.x * drag, (vel.y - gravity) * drag, vel.z * drag);
             Vec3d next = pos.add(vel);
             BlockHitResult hit = client.world.raycast(new RaycastContext(
                     pos, next, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, entity));
@@ -185,7 +186,6 @@ public class PearlMarkers extends Module {
                 return new LandingPrediction(hit.getPos(), tick);
             }
             pos = next;
-            vel = vel.multiply(drag).add(0.0, -gravity, 0.0);
             if (vel.lengthSquared() < 1.0E-5) {
                 break;
             }

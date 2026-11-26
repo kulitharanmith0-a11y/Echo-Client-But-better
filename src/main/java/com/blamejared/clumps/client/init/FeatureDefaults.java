@@ -446,6 +446,7 @@ public final class FeatureDefaults {
         Module.settings.clear();
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, com.blamejared.clumps.client.modules.internals.ClickGui.scrollSpeed);
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, com.blamejared.clumps.client.modules.internals.ClickGui.streamProof);
+        com.blamejared.clumps.client.modules.internals.ClickGui.appendAppearanceSettings(Module);
         Module.postInitialize();
     }
 

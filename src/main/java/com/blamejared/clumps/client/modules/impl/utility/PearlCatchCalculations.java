@@ -18,8 +18,8 @@ public final class PearlCatchCalculations {
         float yawDifference = Math.abs(MathHelper.wrapDegrees(targetYaw - playerYaw));
         float pitchDifference = Math.abs(targetPitch - playerPitch);
         float largestDifference = Math.max(yawDifference, pitchDifference);
-        float availableSeconds = Math.max(1, throwTick - playerAge - 1) * 0.05F;
-        return MathHelper.clamp(largestDifference / availableSeconds, 50.0F, 420.0F);
+        float availableSeconds = Math.max(1, throwTick - playerAge) * 0.05F;
+        return MathHelper.clamp((largestDifference / availableSeconds) * 1.25F, 90.0F, 720.0F);
     }
 
     

@@ -6,6 +6,7 @@ import com.blamejared.clumps.client.event.EventPriority;
 import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.input.AttackKeyEvent;
 import com.blamejared.clumps.client.event.input.MouseMovementEvent;
+import com.blamejared.clumps.client.event.input.SelectedSlotEvent;
 import com.blamejared.clumps.client.event.interaction.AttackAttemptEvent;
 import com.blamejared.clumps.client.event.interaction.BlockBreakingEvent;
 import com.blamejared.clumps.client.event.interaction.EntityAttackEvent;
@@ -49,16 +50,20 @@ import com.blamejared.clumps.client.utils.targeting.AttackRange;
 import com.blamejared.clumps.client.utils.targeting.EntityPredicates;
 import com.blamejared.clumps.client.utils.targeting.EntityRaycasts;
 import com.blamejared.clumps.client.utils.targeting.TargetSelection;
+import com.blamejared.clumps.client.utils.targeting.WeaponAttributes;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.s2c.play.BundleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlayerRespawnS2CPacket;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -108,6 +113,8 @@ public class TriggerBot extends Module {
     private static final FloatSetting alignFov = new FloatSetting(
             CatalogText.literal("Align FOV"), 18.0f, 5.0f, 60.0f, 1.0f, CatalogText.literal(" deg"),
             ignored -> !aimAlign.isSelected(ALIGN_OFF));
+    private static final FloatSetting missChance = new FloatSetting(
+            CatalogText.literal("Miss Chance"), 0.0f, 0.0f, 50.0f, 1.0f, CatalogText.literal("%"));
 
     private CooldownTimer reactionTimer;
     private CooldownTimer attackTimer;
@@ -124,6 +131,9 @@ public class TriggerBot extends Module {
     private double sampledGroundCooldown;
     private double sampledCritCooldown;
     private boolean sprintSuppressedByTriggerBot;
+    private int lastTrackedSlot = -1;
+    private ItemStack lastTrackedMainHand = ItemStack.EMPTY;
+    private long lastSlotSwapTick = -1L;
 
     public TriggerBot() {
         super(new ModuleInfo(
@@ -151,6 +161,7 @@ public class TriggerBot extends Module {
         aimAlign.description(CatalogText.literal("Smoothly aligns visible aim onto targets within Align FOV"));
         alignSpeed.description(CatalogText.literal("Maximum smooth angular alignment speed"));
         alignFov.description(CatalogText.literal("Maximum angle from crosshair to assist alignment"));
+        missChance.description(CatalogText.literal("Chance to intentionally whiff a swing for more natural hit accuracy"));
 
         critOnlyOnSpace.setVisibilityPredicate(ignored -> !critMode.isSelected(CRIT_NONE));
         critRange.setVisibilityPredicate(ignored -> !critMode.isSelected(CRIT_NONE));
@@ -162,6 +173,7 @@ public class TriggerBot extends Module {
         critCooldown.tooltip(SECTION_TIMING);
         reactionDelay.tooltip(SECTION_TIMING);
         attackDelay.tooltip(SECTION_TIMING);
+        missChance.tooltip(SECTION_TIMING);
         pingHurtTime.tooltip(SECTION_TIMING);
         itemWhitelist.tooltip(SECTION_CONDITIONS);
         hotbarWhitelist.tooltip(SECTION_CONDITIONS);
@@ -195,11 +207,22 @@ public class TriggerBot extends Module {
     }
 
     @Subscribe
+    private void onSelectedSlot(SelectedSlotEvent event) {
+        if (isOutsideWorld() || event.getSelectedSlot() == event.getPreviousSlot()) {
+            return;
+        }
+        lastTrackedSlot = event.getSelectedSlot();
+        lastTrackedMainHand = client.player.getInventory().getStack(event.getSelectedSlot()).copy();
+        lastSlotSwapTick = client.player.age;
+    }
+
+    @Subscribe
     private void onClientTick(ClientTickEvent event) {
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || MinecraftRenderState.hasOverlay()) {
             releaseCritSprintSuppression();
             return;
         }
+        syncHeldItemSwapState();
         TriggerBotTiming.CritPolicy policy = currentCritPolicy();
         if (policy == TriggerBotTiming.CritPolicy.NONE || !passesLoadoutConditions() || isPlayerBusy() || isYieldingToOtherModules()) {
             releaseCritSprintSuppression();
@@ -218,7 +241,7 @@ public class TriggerBot extends Module {
         boolean approachingOrFallingCrit = !client.player.isOnGround()
                 && !EntityRaycasts.cannotCritOrSprint()
                 && client.player.getVelocity().y <= 0.14
-                && client.player.getAttackCooldownProgress(0.5F) >= 0.72F;
+                && effectiveCooldownProgress() >= 0.72F;
         if (!approachingOrFallingCrit) {
             releaseCritSprintSuppression();
             return;
@@ -343,6 +366,7 @@ public class TriggerBot extends Module {
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || MinecraftRenderState.hasOverlay()) {
             return;
         }
+        syncHeldItemSwapState();
         if (!passesLoadoutConditions()) {
             clearTargetAcquisition();
             return;
@@ -415,6 +439,17 @@ public class TriggerBot extends Module {
             return;
         }
         if (noSweepOrPickHits.getValue() && (EntityRaycasts.wouldSweepAttack() || EntityRaycasts.wouldPickHit())) {
+            return;
+        }
+        if (TriggerBotTiming.shouldMissAttack(missChance.getValue(), ThreadLocalRandom.current().nextFloat())) {
+            client.player.swingHand(Hand.MAIN_HAND);
+            ((com.blamejared.clumps.client.mixin.accessor.LivingEntityAccessor) client.player).setTicksSinceHandEquipping(0);
+            WeaponAttributes.recordSwingTick(client.player);
+            attackTimer.reset();
+            attackDelayMillis = sampleDelayMillis(attackDelay);
+            sampleAttackCooldowns();
+            lastAttackTick = client.player.age;
+            releaseCritSprintSuppression();
             return;
         }
 
@@ -611,6 +646,30 @@ public class TriggerBot extends Module {
                 leadTicks);
     }
 
+    private void syncHeldItemSwapState() {
+        if (client.player == null) {
+            return;
+        }
+        int currentSlot = client.player.getInventory().getSelectedSlot();
+        ItemStack currentStack = client.player.getMainHandStack();
+        if (lastTrackedSlot == -1) {
+            lastTrackedSlot = currentSlot;
+            lastTrackedMainHand = currentStack.copy();
+            return;
+        }
+        if (currentSlot != lastTrackedSlot || !ItemStack.areItemsAndComponentsEqual(currentStack, lastTrackedMainHand)) {
+            lastTrackedSlot = currentSlot;
+            lastTrackedMainHand = currentStack.copy();
+            lastSlotSwapTick = client.player.age;
+        }
+    }
+
+    private float effectiveCooldownProgress() {
+        float vanilla = client.player.getAttackCooldownProgress(0.5F);
+        double heldSpeed = WeaponAttributes.projectedAttackSpeed(client.player, client.player.getMainHandStack());
+        return TriggerBotTiming.effectiveSwapAwareProgress(vanilla, client.player.age, lastSlotSwapTick, heldSpeed);
+    }
+
     private boolean passesCooldown(double squaredDistance, boolean axeShieldBreak) {
         boolean inCritRange = TriggerBotTiming.isWithinRange(
                 squaredDistance, critRange.getLower(), critRange.getUpper());
@@ -618,7 +677,7 @@ public class TriggerBot extends Module {
                 && inCritRange
                 && EntityRaycasts.isCriticalState()
                 && !axeShieldBreak;
-        float progress = client.player.getAttackCooldownProgress(0.5F);
+        float progress = effectiveCooldownProgress();
         return TriggerBotTiming.passesCooldown(
                 progress,
                 useCritCooldown,
@@ -828,6 +887,9 @@ public class TriggerBot extends Module {
         lastShieldBreakTargetId = -1;
         reactionDelayMillis = 0L;
         attackDelayMillis = 0L;
+        lastTrackedSlot = -1;
+        lastTrackedMainHand = ItemStack.EMPTY;
+        lastSlotSwapTick = -1L;
         releaseCritSprintSuppression();
     }
 
@@ -882,6 +944,7 @@ public class TriggerBot extends Module {
         CatalogSettings.append(Module, attackDistance);
         CatalogSettings.append(Module, reactionDelay);
         CatalogSettings.append(Module, attackDelay);
+        CatalogSettings.append(Module, missChance);
         CatalogSettings.append(Module, aimAlign);
         CatalogSettings.append(Module, alignSpeed);
         CatalogSettings.append(Module, alignFov);

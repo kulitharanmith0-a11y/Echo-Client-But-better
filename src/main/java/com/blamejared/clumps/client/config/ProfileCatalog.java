@@ -5,7 +5,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public final class ProfileCatalog {
@@ -62,12 +64,29 @@ public final class ProfileCatalog {
         activeConfigId = ProfileCodec.textField(response, "activeConfigId");
         JsonArray configs = response.has("configs") && response.get("configs").isJsonArray()
                 ? response.getAsJsonArray("configs") : new JsonArray();
+        List<StoreMeta> cloudProfiles = CloudConfigCatalog.cachedMetas();
+        Map<String, StoreMeta> cloudById = new HashMap<>();
+        for (StoreMeta cloud : cloudProfiles) {
+            cloudById.put(cloud.id(), cloud);
+        }
         List<StoreMeta> profiles = new ArrayList<>();
         for (JsonElement config : configs) {
-            if (config.isJsonObject()) {
-                profiles.add(ProfileCodec.metadata(config.getAsJsonObject()));
+            if (!config.isJsonObject()) {
+                continue;
             }
+            StoreMeta local = ProfileCodec.metadata(config.getAsJsonObject());
+            StoreMeta upstream = local.sourceId().isBlank() ? null : cloudById.get(local.sourceId());
+            if (upstream != null && upstream.updatedAt() > local.updatedAt()) {
+                local = new StoreMeta(
+                        local.id(), local.name(), local.description(), local.author(),
+                        local.serverName(), local.serverIp(), local.serverIcon(), local.type(),
+                        local.publicVisibility(), local.createdAt(), local.updatedAt(),
+                        local.active(), local.owned(), local.sourceId(), local.publishedId(),
+                        local.publishedChanges(), true);
+            }
+            profiles.add(local);
         }
+        profiles.addAll(cloudProfiles);
         cachedProfiles = List.copyOf(profiles);
         return profiles;
     }
@@ -116,8 +135,16 @@ public final class ProfileCatalog {
 
     
     public StoreMeta save(String id, String name, String description, boolean publicVisibility, String type, String data) {
+        return save(id, name, description, publicVisibility, type, data, "", "", "");
+    }
+
+    public StoreMeta save(String id, String name, String description, boolean publicVisibility, String type, String data,
+            String sourceId, String serverName, String serverIp) {
         JsonObject response = io.saveProfile(new ProfileStore.SaveRequest(
-                id == null ? "" : id, name, description == null ? "" : description, publicVisibility ? "PUBLIC" : "PRIVATE", type == null ? "GHOST" : type, data));
+                id == null ? "" : id, name, description == null ? "" : description,
+                publicVisibility ? "PUBLIC" : "PRIVATE", type == null ? "GHOST" : type, data,
+                sourceId == null ? "" : sourceId, serverName == null ? "" : serverName,
+                serverIp == null ? "" : serverIp));
         if (!ProfileCodec.isSuccessful(response)) {
             return null;
         }

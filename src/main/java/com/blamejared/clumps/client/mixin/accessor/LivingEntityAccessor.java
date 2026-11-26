@@ -27,6 +27,9 @@ public interface LivingEntityAccessor {
     @Accessor("ticksSinceHandEquipping")
     int getTicksSinceHandEquipping();
 
+    @Accessor("ticksSinceHandEquipping")
+    void setTicksSinceHandEquipping(int ticks);
+
     @Accessor("maxHurtTime")
     int getMaxHurtTime();
 

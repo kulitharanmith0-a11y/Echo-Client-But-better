@@ -17,6 +17,7 @@ import com.blamejared.clumps.client.handlers.rotation.RotationSettings;
 import com.blamejared.clumps.client.handlers.rotation.RotationVisibility;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.settings.BooleanSetting;
+import com.blamejared.clumps.client.settings.IntSetting;
 import com.blamejared.clumps.client.settings.KeybindSetting;
 import com.blamejared.clumps.client.settings.MultiChoiceSetting;
 import com.blamejared.clumps.client.utils.Rotation;
@@ -57,15 +58,23 @@ public class XBow extends Module {
     private static final CharSequence placeOption4 = CatalogText.literal("Rail");
     private static final CharSequence placeOption3 = CatalogText.literal("Cart");
     private static final CharSequence placeOption = CatalogText.literal("Shoot");
+    private static final String TIMING_TOOLTIP = "Timing";
     private static KeybindSetting activateKey;
     private static MultiChoiceSetting place;
     private static BooleanSetting autoAim;
     private static BooleanSetting silentRotations;
+    private static final IntSetting railDelay = new IntSetting(CatalogText.literal("Rail Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
+    private static final IntSetting cartDelay = new IntSetting(CatalogText.literal("Cart Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
+    private static final IntSetting fireDelay = new IntSetting(CatalogText.literal("Fire Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
+    private static final IntSetting shootDelay = new IntSetting(CatalogText.literal("Shoot Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
+    private static final IntSetting switchBackDelay = new IntSetting(CatalogText.literal("Switch Back Delay"), 1, 0, 10, CatalogText.literal(" ticks"));
     private BlockPos targetBlockPosition;
     private BlockPos supportBlockPosition;
     private Vec3d cachedTargetPosition;
     private Vec3d targetHitPosition;
     private long activationTick;
+    private long stepEnteredTick;
+    private int lastTrackedStep;
     private BlockHitResult pendingBlockHit;
     private int placementStep;
     private int selectedPlacementSlot;
@@ -82,6 +91,11 @@ public class XBow extends Module {
         CatalogSettings.append(Module, place);
         CatalogSettings.append(Module, autoAim);
         CatalogSettings.append(Module, silentRotations);
+        CatalogSettings.append(Module, railDelay);
+        CatalogSettings.append(Module, cartDelay);
+        CatalogSettings.append(Module, fireDelay);
+        CatalogSettings.append(Module, shootDelay);
+        CatalogSettings.append(Module, switchBackDelay);
     }
 
     public static CharSequence bootstrapPlaceOption2() { return placeOption2; }
@@ -103,6 +117,22 @@ public class XBow extends Module {
         place.setSelected(placeOption3, true);
         place.setSelected(placeOption, true);
         silentRotations.setVisibilityPredicate(ignored -> autoAim.getValue());
+        railDelay.tooltip(TIMING_TOOLTIP);
+        cartDelay.tooltip(TIMING_TOOLTIP);
+        fireDelay.tooltip(TIMING_TOOLTIP);
+        shootDelay.tooltip(TIMING_TOOLTIP);
+        switchBackDelay.tooltip(TIMING_TOOLTIP);
+        railDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption4));
+        cartDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption3));
+        fireDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption2));
+        shootDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption));
+        railDelay.description(CatalogText.literal("Ticks to wait before placing the rail"));
+        cartDelay.description(CatalogText.literal("Ticks to wait after placing the rail before placing the TNT cart"));
+        fireDelay.description(CatalogText.literal("Ticks to wait before lighting the fire"));
+        shootDelay.description(CatalogText.literal("Ticks to wait before firing the crossbow through the fire"));
+        switchBackDelay.description(CatalogText.literal("Ticks to wait after shooting before switching back to your previous slot"));
+        lastTrackedStep = -1;
+        stepEnteredTick = -1L;
     }
 
     
@@ -146,6 +176,7 @@ public class XBow extends Module {
             if (risingEdge) beginSequence();
             return;
         }
+        if (!isStepDelayElapsed(placementStep)) return;
         if (placementStep == SHOOT) {
             if (selectedPlacementSlot == -1) {
                 if (!InventoryItems.isChargedCrossbow(client.player.getOffHandStack())) return;
@@ -191,7 +222,9 @@ public class XBow extends Module {
             releaseRotation();
             return;
         }
-        if ((long) client.player.age - activationTick > TIMEOUT_TICKS) {
+        int maxTicks = TIMEOUT_TICKS + railDelay.getValue() + cartDelay.getValue()
+                + fireDelay.getValue() + shootDelay.getValue();
+        if ((long) client.player.age - activationTick > maxTicks) {
             abortSequence();
             return;
         }
@@ -287,6 +320,10 @@ public class XBow extends Module {
             abortSequence();
             return false;
         }
+        if (placementStep != lastTrackedStep) {
+            lastTrackedStep = placementStep;
+            stepEnteredTick = client.player.age;
+        }
         if (placementStep != CART) interactionSubmitted = false;
         pendingBlockHit = null;
         selectedPlacementSlot = findStepSlot(placementStep);
@@ -364,7 +401,12 @@ public class XBow extends Module {
     }
 
     private void finishSequence() {
-        DeferredActionQueue.select(this, DeferredActionQueue.selectedSlot(), 1);
+        int delay = Math.max(0, switchBackDelay.getValue());
+        if (delay == 0) {
+            DeferredActionQueue.finish(this, true);
+        } else {
+            DeferredActionQueue.select(this, DeferredActionQueue.selectedSlot(), delay);
+        }
         clearPlacementState();
         releaseRotation();
     }
@@ -382,7 +424,23 @@ public class XBow extends Module {
         targetHitPosition = null;
         pendingBlockHit = null;
         selectedPlacementSlot = -1;
+        lastTrackedStep = -1;
+        stepEnteredTick = -1L;
         interactionSubmitted = false;
+    }
+
+    private boolean isStepDelayElapsed(int step) {
+        int delay = switch (step) {
+            case RAIL -> railDelay.getValue();
+            case CART -> cartDelay.getValue();
+            case FIRE -> fireDelay.getValue();
+            case SHOOT -> shootDelay.getValue();
+            default -> 0;
+        };
+        if (delay <= 0 || stepEnteredTick < 0L) {
+            return true;
+        }
+        return (long) client.player.age - stepEnteredTick >= delay;
     }
 
     private void releaseRotation() {

@@ -17,7 +17,7 @@ import java.util.function.Consumer;
 
 public final class EventBus {
     private static final MethodHandles.Lookup lookup = MethodHandles.lookup();
-    private static final MethodType subscriberType = MethodType.methodType(void.class, Event.class);
+    private static final MethodType subscriberType = MethodType.methodType(void.class, Object.class);
     private static final MethodHandle[] emptySubscribers = new MethodHandle[0];
     private static final Map<Class<?>, SortedMap<EventPriority, LinkedHashMap<Object, MethodHandle[]>>>
             subscribersByPriority = new LinkedHashMap<>();
@@ -176,7 +176,7 @@ public final class EventBus {
                     boolean wasCancelled = event.cancelled;
                     long start = track ? System.nanoTime() : 0L;
                     try {
-                        methods[i].invokeExact(event);
+                        methods[i].invokeExact((Object) event);
                     } catch (Throwable err) {
                         if (track) {
                             String mName = (names != null && i < names.length) ? names[i] : "?";
@@ -190,7 +190,7 @@ public final class EventBus {
             } else {
                 for (MethodHandle method : methods) {
                     try {
-                        method.invokeExact(event);
+                        method.invokeExact((Object) event);
                     } catch (Throwable ignored) {
                     }
                 }

@@ -84,6 +84,9 @@ public final class AutoUpdater {
     private static volatile String completedUpdateSummary;
     private static volatile long bannerStartedAtNanos;
     private static volatile boolean autoOpenChangelogPending;
+    private static volatile String stagedToastVersion;
+    private static volatile String lastToastedStagedVersion;
+    private static volatile long stagedToastStartedAtNanos;
 
     private static volatile String changelogVersion;
     private static volatile String changelogSummary;
@@ -149,6 +152,36 @@ public final class AutoUpdater {
         return (float) BANNER_DURATION_NANOS / 1.0e9f;
     }
 
+    public static String getActiveStagedToastVersion() {
+        if (aborted || ClumpsClient.eventsDisabled || !stagedReady) {
+            return null;
+        }
+        String ver = stagedToastVersion;
+        if (ver == null || ver.isEmpty()) {
+            return null;
+        }
+        long now = System.nanoTime();
+        long start = stagedToastStartedAtNanos;
+        if (start == 0L) {
+            stagedToastStartedAtNanos = now;
+            return ver;
+        }
+        if (now - start >= BANNER_DURATION_NANOS) {
+            stagedToastVersion = null;
+            stagedToastStartedAtNanos = 0L;
+            return null;
+        }
+        return ver;
+    }
+
+    public static float getStagedToastElapsedSeconds() {
+        long start = stagedToastStartedAtNanos;
+        if (start == 0L) {
+            return 0.0f;
+        }
+        return Math.max(0.0f, (float) (System.nanoTime() - start) / 1.0e9f);
+    }
+
     public static boolean shouldAutoOpenChangelogModal() {
         return !aborted && !ClumpsClient.eventsDisabled && autoOpenChangelogPending;
     }
@@ -158,6 +191,9 @@ public final class AutoUpdater {
         completedUpdateVersion = null;
         completedUpdateSummary = null;
         bannerStartedAtNanos = 0L;
+        stagedToastVersion = null;
+        lastToastedStagedVersion = null;
+        stagedToastStartedAtNanos = 0L;
     }
 
     public static boolean hasChangelogAvailable() {
@@ -225,6 +261,9 @@ public final class AutoUpdater {
         completedUpdateVersion = null;
         completedUpdateSummary = null;
         bannerStartedAtNanos = 0L;
+        stagedToastVersion = null;
+        lastToastedStagedVersion = null;
+        stagedToastStartedAtNanos = 0L;
         stagedVersion = null;
         stagedSha256 = null;
         stagedMarkerJson = null;
@@ -523,6 +562,11 @@ public final class AutoUpdater {
                 stagedVersion = remoteVersion.isEmpty() ? "Latest" : remoteVersion;
                 stagedMarkerJson = buildMarkerJson(stagedVersion, remoteSummary, remoteChanges);
                 stagedReady = true;
+                if (!stagedVersion.equals(lastToastedStagedVersion)) {
+                    lastToastedStagedVersion = stagedVersion;
+                    stagedToastVersion = stagedVersion;
+                    stagedToastStartedAtNanos = 0L;
+                }
                 tempJar = null;
 
                 if (previousStaged != null && !previousStaged.equals(stagedJarPath)) {

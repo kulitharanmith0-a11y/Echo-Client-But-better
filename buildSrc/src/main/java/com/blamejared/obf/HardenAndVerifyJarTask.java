@@ -369,6 +369,14 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
         int verifiedClasses = 0;
         List<String> debugLeaks = new ArrayList<>();
         Map<String, List<String>> leakHits = new LinkedHashMap<>();
+        Set<String> presentInternalClasses = new LinkedHashSet<>();
+        for (String key : entries.keySet()) {
+            if (key.endsWith(".class") && !key.startsWith("META-INF/")) {
+                presentInternalClasses.add(key.substring(0, key.length() - 6));
+            }
+        }
+        Pattern internalRefPattern = Pattern.compile("com/blamejared/clumps/[A-Za-z0-9_$/]+");
+        Map<String, List<String>> missingClassRefs = new LinkedHashMap<>();
 
         for (Map.Entry<String, byte[]> e : entries.entrySet()) {
             String name = e.getKey();
@@ -409,6 +417,43 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
                 }
             }
 
+            // Sponge Mixin's MixinTargetContext.getConstructor() skips merging <init> field initializers
+            // when LineNumberTable is stripped. Verify no Mixin relies on a non-zero <init> PUTFIELD without line numbers.
+            if (name.startsWith(NEW_MIXIN_PKG)) {
+                for (MethodNode mn : cn.methods) {
+                    if ("<init>".equals(mn.name) && mn.instructions != null) {
+                        boolean hasPutField = false;
+                        boolean hasLineNumbers = false;
+                        for (org.objectweb.asm.tree.AbstractInsnNode insn = mn.instructions.getFirst();
+                                insn != null; insn = insn.getNext()) {
+                            if (insn.getOpcode() == Opcodes.PUTFIELD) {
+                                hasPutField = true;
+                            } else if (insn instanceof org.objectweb.asm.tree.LineNumberNode) {
+                                hasLineNumbers = true;
+                            }
+                        }
+                        if (hasPutField && !hasLineNumbers) {
+                            throw new IllegalStateException("Stage 4 verification failed: Mixin " + name
+                                    + " has a field initializer in <init> without LineNumberTable (Sponge Mixin will silently drop it!)");
+                        }
+                    }
+                }
+            }
+
+            // Verify @Subscribe (the single @interface in our mod) preserves its AnnotationDefault attribute
+            if ((cn.access & Opcodes.ACC_ANNOTATION) != 0) {
+                boolean hasDefault = false;
+                for (MethodNode mn : cn.methods) {
+                    if (mn.annotationDefault != null) {
+                        hasDefault = true;
+                        break;
+                    }
+                }
+                if (!hasDefault) {
+                    throw new IllegalStateException("Stage 4 verification failed: annotation " + name + " is missing AnnotationDefault attribute!");
+                }
+            }
+
             if (name.startsWith("com/blamejared/clumps/internal/")) {
                 if (cn.sourceFile != null && !cn.sourceFile.isEmpty()) {
                     debugLeaks.add(name + " (SourceFile=" + cn.sourceFile + ")");
@@ -422,7 +467,24 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
                 }
             }
 
+            // Verify ZERO stale/un-remapped internal class references (prevents NoClassDefFoundError at runtime!)
+            Matcher refM = internalRefPattern.matcher(isoClass);
+            while (refM.find()) {
+                String ref = refM.group();
+                if (!presentInternalClasses.contains(ref)) {
+                    missingClassRefs.computeIfAbsent(ref, k -> new ArrayList<>()).add(name);
+                }
+            }
+
             verifiedClasses++;
+        }
+
+        if (!missingClassRefs.isEmpty()) {
+            StringBuilder msg = new StringBuilder("Stage 4 stale internal class reference check failed:\n");
+            for (Map.Entry<String, List<String>> e : missingClassRefs.entrySet()) {
+                msg.append("  MISSING ").append(e.getKey()).append(" <- ").append(e.getValue().subList(0, Math.min(3, e.getValue().size()))).append('\n');
+            }
+            throw new IllegalStateException(msg.toString());
         }
 
         if (!leakHits.isEmpty()) {

@@ -220,9 +220,16 @@ public final class HudRenderer {
     public void renderAutoUpdateToast(UiRenderer renderer, TextureView backdrop) {
         if (ClumpsClient.eventsDisabled || renderer == null || !isInitialized()) return;
         String rawVer = com.blamejared.clumps.client.updater.AutoUpdater.getActiveBannerVersion();
-        if (rawVer == null || rawVer.isEmpty()) return;
+        boolean isStagedNotice = false;
+        if (rawVer == null || rawVer.isEmpty()) {
+            rawVer = com.blamejared.clumps.client.updater.AutoUpdater.getActiveStagedToastVersion();
+            if (rawVer == null || rawVer.isEmpty()) return;
+            isStagedNotice = true;
+        }
 
-        float elapsed = com.blamejared.clumps.client.updater.AutoUpdater.getBannerElapsedSeconds();
+        float elapsed = isStagedNotice
+                ? com.blamejared.clumps.client.updater.AutoUpdater.getStagedToastElapsedSeconds()
+                : com.blamejared.clumps.client.updater.AutoUpdater.getBannerElapsedSeconds();
         float total = Math.max(1.0f, com.blamejared.clumps.client.updater.AutoUpdater.getBannerTotalSeconds());
         float enter = Math.min(1.0f, elapsed / 0.38f);
         float enterEase = 1.0f - (1.0f - enter) * (1.0f - enter) * (1.0f - enter);
@@ -232,12 +239,14 @@ public final class HudRenderer {
         if (presence <= 0.005f) return;
 
         HudElementLayout layout = createLayout(renderer, backdrop, 1.0f, presence);
-        String title = "The client has been updated";
+        String title = isStagedNotice ? "Update ready to install" : "The client has been updated";
         String verBadge = rawVer.startsWith("v") || rawVer.startsWith("V") ? rawVer : "v" + rawVer;
-        String rawSummary = com.blamejared.clumps.client.updater.AutoUpdater.getActiveBannerSummary();
-        String subtitle = (rawSummary != null && !rawSummary.isEmpty())
-                ? rawSummary + "  -  Open ClickGUI for changelog"
-                : "Installed automatically  -  Open ClickGUI for changelog";
+        String rawSummary = isStagedNotice ? null : com.blamejared.clumps.client.updater.AutoUpdater.getActiveBannerSummary();
+        String subtitle = isStagedNotice
+                ? "Open ClickGUI to Apply & Close  -  or restart to update"
+                : ((rawSummary != null && !rawSummary.isEmpty())
+                        ? rawSummary + "  -  Open ClickGUI for changelog"
+                        : "Installed automatically  -  Open ClickGUI for changelog");
         if (subtitle.length() > 74) {
             subtitle = subtitle.substring(0, 71) + "...";
         }

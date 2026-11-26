@@ -13,19 +13,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(PlayerInventory.class)
 public class PlayerInventoryMixin {
-    @Unique private int clumps$previousSlot = -1;
+    @Unique private int clumps$previousSlotPlusOne;
 
     @Inject(method = "setSelectedSlot", at = @At("HEAD"), cancellable = true)
     private void onSetSelectedSlotHead(int selectedSlot, CallbackInfo callback) {
         if (!ClumpsClient.eventsDisabled) {
             PlayerInventory inventory = (PlayerInventory) (Object) this;
             int previousSlot = inventory.getSelectedSlot();
-            clumps$previousSlot = previousSlot;
+            clumps$previousSlotPlusOne = previousSlot + 1;
             if (previousSlot != selectedSlot) {
                 SelectedSlotEvent event = new SelectedSlotEvent(previousSlot, selectedSlot);
                 event.post();
                 if (event.cancelled) {
-                    clumps$previousSlot = -1;
+                    clumps$previousSlotPlusOne = 0;
                     callback.cancel();
                 }
             }
@@ -34,8 +34,8 @@ public class PlayerInventoryMixin {
 
     @Inject(method = "setSelectedSlot", at = @At("RETURN"))
     private void onSetSelectedSlotReturn(int selectedSlot, CallbackInfo callback) {
-        int previousSlot = clumps$previousSlot;
-        clumps$previousSlot = -1;
+        int previousSlot = clumps$previousSlotPlusOne - 1;
+        clumps$previousSlotPlusOne = 0;
         if (ClumpsClient.eventsDisabled || previousSlot == -1 || previousSlot == selectedSlot) {
             return;
         }

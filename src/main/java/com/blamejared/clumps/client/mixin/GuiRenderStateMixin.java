@@ -15,25 +15,28 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GuiRenderStateMixin implements Platform.GuiState {
     @Shadow @Final private List<?> rootLayers;
     @Shadow private int blurLayer;
-    @Unique private int screenLayerStart = -1;
+    @Unique private int screenLayerStart;
+    @Unique private boolean screenLayerStartSet;
     @Unique private boolean screenBlurLayerInstalled;
 
     @Inject(method = "clear", at = @At("TAIL"))
     private void onClearTail(CallbackInfo callback) {
-        screenLayerStart = -1;
+        screenLayerStart = 0;
+        screenLayerStartSet = false;
         screenBlurLayerInstalled = false;
     }
 
     @Override
     public void markScreenLayerStart() {
-        if (screenLayerStart == -1) {
+        if (!screenLayerStartSet) {
             screenLayerStart = rootLayers.size();
+            screenLayerStartSet = true;
         }
     }
 
     @Override
     public boolean prepareScreenBlurLayer() {
-        if (screenLayerStart == -1 || screenLayerStart >= rootLayers.size()) {
+        if (!screenLayerStartSet || screenLayerStart >= rootLayers.size()) {
             return false;
         }
         if (blurLayer == Integer.MAX_VALUE) {

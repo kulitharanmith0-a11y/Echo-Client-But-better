@@ -43,6 +43,21 @@ public final class ClientResources {
         return new String(readBytes(path), StandardCharsets.UTF_8);
     }
 
+    public static void clearVaultCache() {
+        synchronized (ClientResources.class) {
+            Map<Long, byte[]> current = vaultEntries;
+            vaultEntries = null;
+            if (current != null) {
+                for (byte[] data : current.values()) {
+                    if (data != null) {
+                        java.util.Arrays.fill(data, (byte) 0);
+                    }
+                }
+                current.clear();
+            }
+        }
+    }
+
     private static Map<Long, byte[]> getVault() {
         if (vaultLoaded) {
             return vaultEntries;

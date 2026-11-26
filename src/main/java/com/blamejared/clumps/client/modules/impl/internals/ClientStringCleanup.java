@@ -218,6 +218,13 @@ public final class ClientStringCleanup {
                 }
                 continue;
             }
+            if (isStatic && !Modifier.isFinal(field.getModifiers()) && field.isSynthetic() && value instanceof String[] cachedStrings) {
+                actions.add(() -> {
+                    Arrays.fill(cachedStrings, null);
+                    memory.clearReference(field, null);
+                });
+                continue;
+            }
             if (belongsToApplication(value.getClass())
                     || value instanceof StringBuilder
                     || value instanceof StringBuffer
@@ -260,12 +267,16 @@ public final class ClientStringCleanup {
         }
         String name = type.getName();
         return name.contains(".mixin.")
+                || name.startsWith("com.blamejared.clumps.internal.m.")
                 || name.contains(".event.")
                 || name.contains(".keyboard.")
                 || name.contains(".platform.")
                 || name.contains(".gfx.")
                 || name.contains(".render.")
                 || name.contains(".natives.")
+                || type == com.blamejared.clumps.client.event.EventBus.class
+                || type == com.blamejared.clumps.client.keyboard.KeybindingCache.class
+                || type == com.blamejared.clumps.client.keyboard.KeyStateOverrides.class
                 || type == ClumpsClient.class
                 || type == SelfDestruct.class
                 || type == ClientStringCleanup.class
@@ -301,9 +312,9 @@ public final class ClientStringCleanup {
                 || typeName.startsWith("org.slf4j.")
                 || typeName.startsWith("org.lwjgl.system.SharedLibrary")
                 || typeName.startsWith("com.google.gson.")
-                || typeName.equals("com.blamejared.clumps.client.ui.UiId")
-                || typeName.equals("com.blamejared.clumps.client.gui.animations.SpringSpec")
-                || typeName.equals("com.blamejared.clumps.client.gui.animations.TransitionSpec");
+                || fieldType == com.blamejared.clumps.client.ui.UiId.class
+                || fieldType == com.blamejared.clumps.client.gui.animations.SpringSpec.class
+                || fieldType == com.blamejared.clumps.client.gui.animations.TransitionSpec.class;
     }
 
     private static boolean isHeapOwnedStringSource(Class<?> type, Object owner, boolean isStatic) {

@@ -12,7 +12,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(RenderTickCounter.Dynamic.class)
 public class RenderTickCounterDynamicMixin implements Platform.TickControl {
     @Shadow private float dynamicDeltaTicks;
-    @Unique private float clumps$tickSpeedMultiplier = 1.0F;
+    @Unique private float clumps$tickSpeedMultiplier;
+    @Unique private boolean clumps$tickSpeedSet;
 
     @Inject(method = "beginRenderTick(J)I", at = @At(value = "FIELD", target = "Lnet/minecraft/client/render/RenderTickCounter$Dynamic;lastTimeMillis:J", ordinal = 1))
     private void scaleFrameDuration(long timeMillis, CallbackInfoReturnable<Integer> callback) {
@@ -21,11 +22,12 @@ public class RenderTickCounterDynamicMixin implements Platform.TickControl {
 
     @Override
     public float getTickSpeedMultiplier() {
-        return clumps$tickSpeedMultiplier;
+        return clumps$tickSpeedSet ? clumps$tickSpeedMultiplier : 1.0F;
     }
 
     @Override
     public void setTickSpeedMultiplier(float multiplier) {
         clumps$tickSpeedMultiplier = multiplier;
+        clumps$tickSpeedSet = true;
     }
 }

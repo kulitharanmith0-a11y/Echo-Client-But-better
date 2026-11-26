@@ -95,6 +95,10 @@ public class SelfDestruct extends Module {
             com.blamejared.clumps.client.updater.AutoUpdater.abortAndCleanup();
         } catch (Throwable ignored) {
         }
+        try {
+            com.blamejared.clumps.client.gfx.util.ClientResources.clearVaultCache();
+        } catch (Throwable ignored) {
+        }
         String protectedUsername = resolveSessionUsername();
 
         Set<String> preCollectedStrings = Collections.newSetFromMap(new IdentityHashMap<>());

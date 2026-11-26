@@ -108,12 +108,14 @@ public abstract class ProguardObfuscateTask extends DefaultTask {
         sb.append("-dontnote\n");
         sb.append("-dontusemixedcaseclassnames\n");
 
-        // Keep annotations needed by Sponge Mixin (CLASS retention = RuntimeInvisibleAnnotations)
-        // and EventBus @Subscribe (RUNTIME retention = RuntimeVisibleAnnotations).
+        // Keep runtime/class annotations, AnnotationDefault (for @Subscribe default priority),
+        // Java 21 nest/record/bootstrap metadata, and checked Exceptions.
         // Explicitly strip SourceFile, LineNumberTable, LocalVariableTable, LocalVariableTypeTable, MethodParameters!
         sb.append("-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,")
                 .append("RuntimeVisibleParameterAnnotations,RuntimeInvisibleParameterAnnotations,")
-                .append("Signature,InnerClasses,EnclosingMethod,BootstrapMethods,Record\n");
+                .append("RuntimeVisibleTypeAnnotations,RuntimeInvisibleTypeAnnotations,")
+                .append("AnnotationDefault,Exceptions,Signature,InnerClasses,EnclosingMethod,")
+                .append("BootstrapMethods,Record,NestHost,NestMembers,PermittedSubclasses\n");
 
         sb.append("\n# --- Fabric Entrypoints & Mixin Boundaries ---\n");
         sb.append("-keep public class com.blamejared.clumps.client.PreLaunch {\n");

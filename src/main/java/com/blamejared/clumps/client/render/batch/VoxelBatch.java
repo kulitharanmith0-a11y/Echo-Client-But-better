@@ -104,6 +104,10 @@ public final class VoxelBatch implements RenderBatch, SectionUpdateListener {
     }
 
     
+    public boolean hasSections() {
+        return sectionCount > 0;
+    }
+
     @Override
     public void reset() {
         synchronized (pendingUpdates) {

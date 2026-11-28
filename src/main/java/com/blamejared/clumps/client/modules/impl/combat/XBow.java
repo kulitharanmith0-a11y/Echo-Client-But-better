@@ -32,7 +32,9 @@ import java.util.Set;
 import net.minecraft.block.AbstractFireBlock;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.Block;
+import net.minecraft.block.SlabBlock;
 import net.minecraft.entity.vehicle.TntMinecartEntity;
+import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.tag.BlockTags;
@@ -54,6 +56,7 @@ public class XBow extends Module {
     private static final int RAIL = 1;
     private static final int CART = 2;
     private static final int SHOOT = 3;
+    private static final int SLAB = 4;
     private static final CharSequence placeOption2 = CatalogText.literal("Fire");
     private static final CharSequence placeOption4 = CatalogText.literal("Rail");
     private static final CharSequence placeOption3 = CatalogText.literal("Cart");
@@ -63,13 +66,16 @@ public class XBow extends Module {
     private static MultiChoiceSetting place;
     private static BooleanSetting autoAim;
     private static BooleanSetting silentRotations;
+    private static final BooleanSetting safe = new BooleanSetting(CatalogText.literal("Safe"), false);
     private static final IntSetting railDelay = new IntSetting(CatalogText.literal("Rail Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
     private static final IntSetting cartDelay = new IntSetting(CatalogText.literal("Cart Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
     private static final IntSetting fireDelay = new IntSetting(CatalogText.literal("Fire Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
     private static final IntSetting shootDelay = new IntSetting(CatalogText.literal("Shoot Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
+    private static final IntSetting slabDelay = new IntSetting(CatalogText.literal("Slab Delay"), 0, 0, 10, CatalogText.literal(" ticks"));
     private static final IntSetting switchBackDelay = new IntSetting(CatalogText.literal("Switch Back Delay"), 1, 0, 10, CatalogText.literal(" ticks"));
     private BlockPos targetBlockPosition;
     private BlockPos supportBlockPosition;
+    private BlockPos safeSlabPosition;
     private Vec3d cachedTargetPosition;
     private Vec3d targetHitPosition;
     private long activationTick;
@@ -78,7 +84,11 @@ public class XBow extends Module {
     private BlockHitResult pendingBlockHit;
     private int placementStep;
     private int selectedPlacementSlot;
+    private int lockedCrossbowSlot = -1;
+    private long lastShotTick = -10L;
     private boolean interactionSubmitted;
+    private boolean shotFired;
+    private boolean slabPlaced;
     private boolean activationKeyHeld;
     private boolean waitingForRotationRelease;
 
@@ -91,10 +101,12 @@ public class XBow extends Module {
         CatalogSettings.append(Module, place);
         CatalogSettings.append(Module, autoAim);
         CatalogSettings.append(Module, silentRotations);
+        CatalogSettings.append(Module, safe);
         CatalogSettings.append(Module, railDelay);
         CatalogSettings.append(Module, cartDelay);
         CatalogSettings.append(Module, fireDelay);
         CatalogSettings.append(Module, shootDelay);
+        CatalogSettings.append(Module, slabDelay);
         CatalogSettings.append(Module, switchBackDelay);
     }
 
@@ -121,16 +133,20 @@ public class XBow extends Module {
         cartDelay.tooltip(TIMING_TOOLTIP);
         fireDelay.tooltip(TIMING_TOOLTIP);
         shootDelay.tooltip(TIMING_TOOLTIP);
+        slabDelay.tooltip(TIMING_TOOLTIP);
         switchBackDelay.tooltip(TIMING_TOOLTIP);
         railDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption4));
         cartDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption3));
         fireDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption2));
         shootDelay.setVisibilityPredicate(ignored -> place.isSelected(placeOption));
+        slabDelay.setVisibilityPredicate(ignored -> safe.getValue());
+        safe.description(CatalogText.literal("Places a protective slab in front of you after shooting to reduce TNT cart self-damage"));
         railDelay.description(CatalogText.literal("Ticks to wait before placing the rail"));
         cartDelay.description(CatalogText.literal("Ticks to wait after placing the rail before placing the TNT cart"));
         fireDelay.description(CatalogText.literal("Ticks to wait before lighting the fire"));
         shootDelay.description(CatalogText.literal("Ticks to wait before firing the crossbow through the fire"));
-        switchBackDelay.description(CatalogText.literal("Ticks to wait after shooting before switching back to your previous slot"));
+        slabDelay.description(CatalogText.literal("Ticks to wait after shooting before placing the protective slab"));
+        switchBackDelay.description(CatalogText.literal("Ticks to wait after finishing before switching back to your previous slot"));
         lastTrackedStep = -1;
         stepEnteredTick = -1L;
     }
@@ -140,11 +156,16 @@ public class XBow extends Module {
     public void onEnable() {
         targetBlockPosition = null;
         supportBlockPosition = null;
+        safeSlabPosition = null;
         cachedTargetPosition = null;
         targetHitPosition = null;
         pendingBlockHit = null;
         selectedPlacementSlot = -1;
+        lockedCrossbowSlot = -1;
+        lastShotTick = -10L;
         interactionSubmitted = false;
+        shotFired = false;
+        slabPlaced = false;
         activationKeyHeld = false;
         waitingForRotationRelease = false;
         super.onEnable();
@@ -180,11 +201,23 @@ public class XBow extends Module {
         if (placementStep == SHOOT) {
             if (selectedPlacementSlot == -1) {
                 if (!InventoryItems.isChargedCrossbow(client.player.getOffHandStack())) return;
-            } else if (DeferredActionQueue.selectedSlot() != selectedPlacementSlot) {
+            } else if (DeferredActionQueue.selectedSlot() != selectedPlacementSlot
+                    || !InventoryItems.isChargedCrossbow(client.player.getInventory().getStack(selectedPlacementSlot))) {
                 return;
             }
             if (!canShootThroughFire()) return;
-            event.addClick();
+            // Ensure exactly one click is sent so holding/pressing with 2 loaded crossbows never fires both.
+            event.setClickCount(1);
+            lastShotTick = client.player.age;
+            shotFired = true;
+            if (safe.getValue() && findStepSlot(SLAB) != -1) {
+                safeSlabPosition = findSafeSlabPosition(targetBlockPosition);
+                if (safeSlabPosition != null) {
+                    pendingBlockHit = null;
+                    interactionSubmitted = false;
+                    return;
+                }
+            }
             finishSequence();
             return;
         }
@@ -195,6 +228,10 @@ public class XBow extends Module {
             interactionSubmitted = true;
         }
         event.addClick();
+        if (placementStep == SLAB) {
+            slabPlaced = true;
+            finishSequence();
+        }
     }
 
     @Subscribe
@@ -223,19 +260,22 @@ public class XBow extends Module {
             return;
         }
         int maxTicks = TIMEOUT_TICKS + railDelay.getValue() + cartDelay.getValue()
-                + fireDelay.getValue() + shootDelay.getValue();
+                + fireDelay.getValue() + shootDelay.getValue() + slabDelay.getValue();
         if ((long) client.player.age - activationTick > maxTicks) {
-            abortSequence();
+            if (shotFired) finishSequence();
+            else abortSequence();
             return;
         }
         if (!prepareStep()) return;
         if (autoAim.getValue() && !rotations().aim(this, RotationPriority.HIGH, placementStep == SHOOT ? targetHitPosition : pendingBlockHit.getPos(), RotationSettings.uniform(silentRotations.getValue()
                         ? RotationVisibility.SILENT : RotationVisibility.VISIBLE, AimTransition.EASED, AIM_SPEED))) {
-            abortSequence();
+            if (shotFired) finishSequence();
+            else abortSequence();
         }
     }
 
     private void beginSequence() {
+        if ((long) client.player.age - lastShotTick < 3L) return;
         if (!(place.isSelected(placeOption2) || place.isSelected(placeOption4)
                 || place.isSelected(placeOption3) || place.isSelected(placeOption))) return;
         if (!(client.crosshairTarget instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) return;
@@ -256,8 +296,16 @@ public class XBow extends Module {
             if (findStepSlot(CART) == -1) return;
             if (eye.squaredDistanceTo(BlockAimRotation.insetBottomPoint(target, hitPoint)) > reachSquared) return;
         }
-        if (place.isSelected(placeOption) && !hasCrossbow(findStepSlot(SHOOT))) return;
+        lockedCrossbowSlot = -1;
+        if (place.isSelected(placeOption)) {
+            int chosen = chooseSingleCrossbowSlot();
+            if (!hasCrossbow(chosen)) return;
+            lockedCrossbowSlot = chosen;
+        }
         supportBlockPosition = null;
+        safeSlabPosition = null;
+        shotFired = false;
+        slabPlaced = false;
         targetHitPosition = Vec3d.add(target, 0.5, 0.35, 0.5);
         if (place.isSelected(placeOption2)) {
             if (findStepSlot(FIRE) == -1) return;
@@ -317,7 +365,8 @@ public class XBow extends Module {
     private boolean prepareStep() {
         placementStep = nextStep();
         if (placementStep == -1) {
-            abortSequence();
+            if (shotFired) finishSequence();
+            else abortSequence();
             return false;
         }
         if (placementStep != lastTrackedStep) {
@@ -326,15 +375,20 @@ public class XBow extends Module {
         }
         if (placementStep != CART) interactionSubmitted = false;
         pendingBlockHit = null;
-        selectedPlacementSlot = findStepSlot(placementStep);
+        selectedPlacementSlot = placementStep == SHOOT ? resolveLockedCrossbowSlot() : findStepSlot(placementStep);
         boolean awaitingCart = placementStep == CART && selectedPlacementSlot == -1 && interactionSubmitted;
         if (!awaitingCart && (placementStep == SHOOT
-                ? !hasCrossbow(selectedPlacementSlot) : selectedPlacementSlot == -1)) {
-            abortSequence();
+                ? !hasLockedCrossbow(selectedPlacementSlot) : selectedPlacementSlot == -1)) {
+            if (placementStep == SLAB || shotFired) finishSequence();
+            else abortSequence();
             return false;
         }
         if (placementStep == SHOOT) return true;
         pendingBlockHit = findStepHit();
+        if (pendingBlockHit == null && placementStep == SLAB) {
+            finishSequence();
+            return false;
+        }
         return pendingBlockHit != null;
     }
 
@@ -343,18 +397,95 @@ public class XBow extends Module {
             case FIRE -> InventoryItems.findStackInHotbar(XBow::isIgnitionItem);
             case RAIL -> InventoryItems.findStackInHotbar(InventoryItems::isRail);
             case CART -> InventoryItems.findStackInHotbar(XBow::isTntCart);
+            case SLAB -> InventoryItems.findStackInHotbar(XBow::isSlabItem);
             default -> InventoryItems.findStackInHotbar(InventoryItems::isChargedCrossbow);
         };
     }
 
     private static boolean isIgnitionItem(ItemStack stack) { return stack.isOf(Items.FLINT_AND_STEEL); }
     private static boolean isTntCart(ItemStack stack) { return stack.isOf(Items.TNT_MINECART); }
+    private static boolean isSlabItem(ItemStack stack) {
+        if (!(stack.getItem() instanceof BlockItem blockItem)) return false;
+        Block block = blockItem.getBlock();
+        return block instanceof SlabBlock || block.getDefaultState().isIn(BlockTags.SLABS);
+    }
+
+    private BlockPos findSafeSlabPosition(BlockPos cartPos) {
+        if (cartPos == null || client.player == null || client.world == null) return null;
+        Vec3d eye = client.player.getCameraPosVec(1.0F);
+        double reachSquared = MathHelper.square(client.player.getBlockInteractionRange());
+        Vec3d fromCartToPlayer = client.player.getEntityPos().subtract(Vec3d.ofCenter(cartPos));
+        Direction towardPlayer = Direction.getFacing(fromCartToPlayer.x, 0.0, fromCartToPlayer.z);
+        Direction towardCart = towardPlayer.getOpposite();
+        BlockPos feet = client.player.getBlockPos();
+        BlockPos[] candidates = new BlockPos[]{
+                feet.offset(towardCart),
+                cartPos.offset(towardPlayer),
+                feet.offset(towardCart).down()
+        };
+        for (BlockPos candidate : candidates) {
+            if (candidate == null || candidate.equals(cartPos)) continue;
+            if (!BlockPlacement.isReplaceable(candidate)) continue;
+            if (BlockPlacement.intersectsPlayer(candidate)) continue;
+            if (BlockPlacement.hasBlockingEntity(candidate)) continue;
+            BlockHitResult hit = findSlabHit(candidate, eye, reachSquared);
+            if (hit != null) return candidate;
+        }
+        return null;
+    }
+
+    private BlockHitResult findSlabHit(BlockPos candidate, Vec3d eye, double reachSquared) {
+        if (candidate == null || !BlockPlacement.isReplaceable(candidate)) return null;
+        BlockPos below = candidate.down();
+        if (BlockPlacement.supportsFace(below, Direction.UP, false)) {
+            Vec3d topCenter = new Vec3d(below.getX() + 0.5, below.getY() + 1.0, below.getZ() + 0.5);
+            BlockHitResult bottomSlabHit = new BlockHitResult(topCenter, Direction.UP, below, false);
+            if (eye.squaredDistanceTo(topCenter) <= reachSquared
+                    && BlockPlacement.facesEye(bottomSlabHit, eye)
+                    && BlockPlacement.canSeeHit(eye, bottomSlabHit)) {
+                return bottomSlabHit;
+            }
+        }
+        PlacementTarget placement = BlockPlacement.find(candidate, true);
+        return placement != null && eye.squaredDistanceTo(placement.hitResult().getPos()) <= reachSquared
+                ? placement.hitResult() : null;
+    }
+
+    private static int chooseSingleCrossbowSlot() {
+        int held = DeferredActionQueue.selectedSlot();
+        if (held >= 0 && held < 9 && InventoryItems.isChargedCrossbow(client.player.getInventory().getStack(held))) {
+            return held;
+        }
+        return InventoryItems.findStackInHotbar(InventoryItems::isChargedCrossbow);
+    }
+
+    private int resolveLockedCrossbowSlot() {
+        if (lockedCrossbowSlot >= 0 && lockedCrossbowSlot < 9) {
+            return lockedCrossbowSlot;
+        }
+        return -1;
+    }
+
+    private boolean hasLockedCrossbow(int slot) {
+        if (slot >= 0 && slot < 9) {
+            return InventoryItems.isChargedCrossbow(client.player.getInventory().getStack(slot));
+        }
+        return InventoryItems.isChargedCrossbow(client.player.getOffHandStack());
+    }
 
     private static boolean hasCrossbow(int slot) {
         return slot != -1 || InventoryItems.isChargedCrossbow(client.player.getOffHandStack());
     }
 
     private int nextStep() {
+        if (shotFired) {
+            if (safe.getValue() && !slabPlaced && safeSlabPosition != null
+                    && BlockPlacement.isReplaceable(safeSlabPosition)
+                    && !BlockPlacement.intersectsPlayer(safeSlabPosition)) {
+                return SLAB;
+            }
+            return -1;
+        }
         boolean railPresent = AbstractRailBlock.isRail(client.world, targetBlockPosition);
         if (place.isSelected(placeOption4) && !railPresent) return RAIL;
         boolean cartPresent = findCart(targetBlockPosition) != null;
@@ -366,6 +497,9 @@ public class XBow extends Module {
     private BlockHitResult findStepHit() {
         Vec3d eye = client.player.getCameraPosVec(1.0F);
         double reachSquared = MathHelper.square(client.player.getBlockInteractionRange());
+        if (placementStep == SLAB) {
+            return findSlabHit(safeSlabPosition, eye, reachSquared);
+        }
         if (placementStep == FIRE) {
             if (!AbstractFireBlock.canPlaceAt(client.world, supportBlockPosition, client.player.getHorizontalFacing())) return null;
             PlacementTarget placement = BlockPlacement.find(supportBlockPosition, true);
@@ -401,12 +535,10 @@ public class XBow extends Module {
     }
 
     private void finishSequence() {
-        int delay = Math.max(0, switchBackDelay.getValue());
-        if (delay == 0) {
-            DeferredActionQueue.finish(this, true);
-        } else {
-            DeferredActionQueue.select(this, DeferredActionQueue.selectedSlot(), delay);
-        }
+        // Keep the fired crossbow selected for at least 1 tick so the queued click fires only that slot
+        // and never switches back onto a second loaded crossbow before doItemUse executes.
+        int delay = Math.max(1, switchBackDelay.getValue());
+        DeferredActionQueue.select(this, DeferredActionQueue.selectedSlot(), delay);
         clearPlacementState();
         releaseRotation();
     }
@@ -420,13 +552,17 @@ public class XBow extends Module {
     private void clearPlacementState() {
         targetBlockPosition = null;
         supportBlockPosition = null;
+        safeSlabPosition = null;
         cachedTargetPosition = null;
         targetHitPosition = null;
         pendingBlockHit = null;
         selectedPlacementSlot = -1;
+        lockedCrossbowSlot = -1;
         lastTrackedStep = -1;
         stepEnteredTick = -1L;
         interactionSubmitted = false;
+        shotFired = false;
+        slabPlaced = false;
     }
 
     private boolean isStepDelayElapsed(int step) {
@@ -435,6 +571,7 @@ public class XBow extends Module {
             case CART -> cartDelay.getValue();
             case FIRE -> fireDelay.getValue();
             case SHOOT -> shootDelay.getValue();
+            case SLAB -> slabDelay.getValue();
             default -> 0;
         };
         if (delay <= 0 || stepEnteredTick < 0L) {

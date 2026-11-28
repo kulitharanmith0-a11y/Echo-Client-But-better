@@ -36,12 +36,76 @@ public final class CloudConfigCatalog {
     private static volatile List<CloudEntry> cachedEntries = List.of();
     private static volatile long lastFetchAtMs = 0L;
     private static final AtomicBoolean REFRESHING = new AtomicBoolean(false);
+    private static final java.util.concurrent.ConcurrentHashMap<String, List<String>> MODULE_SUMMARY_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public record CloudEntry(StoreMeta meta, String dataJson) { }
 
     public record DecodedShare(String name, String description, String type, String author, String dataJson) { }
 
     private CloudConfigCatalog() { }
+
+    public static void clearCache() {
+        cachedEntries = List.of();
+        lastFetchAtMs = 0L;
+        MODULE_SUMMARY_CACHE.clear();
+    }
+
+    public static List<String> includedModules(String cloudId) {
+        if (!isCloudId(cloudId)) {
+            return List.of();
+        }
+        return MODULE_SUMMARY_CACHE.computeIfAbsent(cloudId, id -> {
+            CloudEntry entry = findById(id);
+            if (entry == null || entry.dataJson() == null || entry.dataJson().isBlank()) {
+                return List.of();
+            }
+            List<String> enabled = new ArrayList<>();
+            List<String> fallback = new ArrayList<>();
+            try {
+                JsonElement rootEl = JsonParser.parseString(entry.dataJson());
+                if (!rootEl.isJsonObject()) return List.of();
+                JsonObject root = rootEl.getAsJsonObject();
+                JsonElement modulesEl = root.has("modules") ? root.get("modules")
+                        : root.has("features") ? root.get("features") : root;
+                if (modulesEl != null && modulesEl.isJsonObject()) {
+                    for (var kv : modulesEl.getAsJsonObject().entrySet()) {
+                        String key = kv.getKey();
+                        if (key == null || key.isBlank() || "Click GUI".equalsIgnoreCase(key)
+                                || "ClickGui".equalsIgnoreCase(key) || "Self Destruct".equalsIgnoreCase(key)) {
+                            continue;
+                        }
+                        fallback.add(key);
+                        if (kv.getValue() != null && kv.getValue().isJsonObject()) {
+                            JsonObject m = kv.getValue().getAsJsonObject();
+                            boolean on = (m.has("enabled") && m.get("enabled").isJsonPrimitive() && m.get("enabled").getAsBoolean())
+                                    || (m.has("toggled") && m.get("toggled").isJsonPrimitive() && m.get("toggled").getAsBoolean());
+                            if (on) {
+                                enabled.add(key);
+                            }
+                        }
+                    }
+                } else if (modulesEl != null && modulesEl.isJsonArray()) {
+                    for (JsonElement item : modulesEl.getAsJsonArray()) {
+                        if (!item.isJsonObject()) continue;
+                        JsonObject m = item.getAsJsonObject();
+                        String key = ProfileCodec.textField(m, "name");
+                        if (key.isBlank()) key = ProfileCodec.textField(m, "id");
+                        if (key.isBlank() || "Click GUI".equalsIgnoreCase(key) || "ClickGui".equalsIgnoreCase(key)) continue;
+                        fallback.add(key);
+                        boolean on = (m.has("enabled") && m.get("enabled").isJsonPrimitive() && m.get("enabled").getAsBoolean())
+                                || (m.has("toggled") && m.get("toggled").isJsonPrimitive() && m.get("toggled").getAsBoolean());
+                        if (on) {
+                            enabled.add(key);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            List<String> source = enabled.isEmpty() ? fallback : enabled;
+            return List.copyOf(source.size() > 10 ? source.subList(0, 10) : source);
+        });
+    }
 
     public static boolean isCloudId(String id) {
         return id != null && id.startsWith(CLOUD_ID_PREFIX);

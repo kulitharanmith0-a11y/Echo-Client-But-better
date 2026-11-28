@@ -359,25 +359,37 @@ public class AutoCart extends Module {
                     > rangeSquared) return false;
         }
         supportBlockPosition = null;
-        if (place.isSelected(placeOption3)) {
-            if (findProtectionSlot() == -1) return false;
-            Vec3d towardRail = Vec3d.ofCenter(railPosition).subtract(client.player.getEntityPos());
-            BlockPos protection = client.player.getBlockPos().offset(Direction.getFacing(towardRail.x, 0.0, towardRail.z));
-            if (!protection.equals(railPosition) && PlacementWorldQueries.isReplaceable(protection)
-                    && !PlacementWorldQueries.intersectsPlayer(protection)
-                    && !PlacementWorldQueries.hasBlockingEntity(protection)
-                    && new Box(protection).raycast(eye, BlockAimRotation.insetBottomPoint(railPosition, targetHitPosition)).isEmpty()) {
-                supportBlockPosition = protection;
-            }
+        if (place.isSelected(placeOption3) && findProtectionSlot() != -1) {
+            supportBlockPosition = findProtectionPosition(railPosition, eye, rangeSquared);
         }
-        if (projectile == null) supportBlockPosition = null;
-        int extraSteps = (place.isSelected(placeOption) && !railPresent ? 1 : 0)
-                + (supportBlockPosition != null ? 1 : 0);
+        int extraSteps = (place.isSelected(placeOption) && !railPresent ? 1 : 0);
         int leadTicks = projectile == null ? PREDICTED_SHOT_LEAD_TICKS
                 : LatencyTracker.milliseconds() / 50 + LATENCY_MARGIN_TICKS;
         if (place.isSelected(placeOption2) && flightTicks < leadTicks + extraSteps) return false;
         trackedProjectile = projectile;
         return true;
+    }
+
+    private BlockPos findProtectionPosition(BlockPos rail, Vec3d eye, double rangeSquared) {
+        Vec3d fromRailToPlayer = client.player.getEntityPos().subtract(Vec3d.ofCenter(rail));
+        Direction behindRailDir = Direction.getFacing(fromRailToPlayer.x, 0.0, fromRailToPlayer.z);
+        Direction inFrontOfPlayerDir = behindRailDir.getOpposite();
+        BlockPos[] candidates = new BlockPos[]{
+            rail.offset(behindRailDir),
+            client.player.getBlockPos().offset(inFrontOfPlayerDir),
+            rail.offset(behindRailDir).down()
+        };
+        for (BlockPos candidate : candidates) {
+            if (candidate == null || candidate.equals(rail)) continue;
+            if (!PlacementWorldQueries.isReplaceable(candidate)) continue;
+            if (PlacementWorldQueries.intersectsPlayer(candidate)) continue;
+            if (PlacementWorldQueries.hasBlockingEntity(candidate)) continue;
+            PlacementTarget target = PlacementTargets.find(candidate, true);
+            if (target == null) continue;
+            if (eye.squaredDistanceTo(target.hitResult().getPos()) > rangeSquared) continue;
+            return candidate;
+        }
+        return null;
     }
 
     private boolean updatePlacementStep() {
@@ -435,13 +447,16 @@ public class AutoCart extends Module {
     private int nextPlacementStep() {
         String[] controlState = SpearReach.readSharedControlState();
         if (controlState != null) return place.isSelected(placeOption2) ? 1 : 0;
-        if (place.isSelected(placeOption3) && supportBlockPosition != null
-                && PlacementWorldQueries.isReplaceable(supportBlockPosition)) return PLACE_PROTECTION;
         if (place.isSelected(placeOption)
                 && !(client.world.getBlockState(railPosition).getBlock() instanceof AbstractRailBlock)) return PLACE_RAIL;
         if (place.isSelected(placeOption2) && !interactionSubmitted
                 && client.world.getNonSpectatingEntities(TntMinecartEntity.class, new Box(railPosition)).isEmpty()) {
             return PLACE_CART;
+        }
+        if (place.isSelected(placeOption3) && supportBlockPosition != null
+                && PlacementWorldQueries.isReplaceable(supportBlockPosition)
+                && !PlacementWorldQueries.intersectsPlayer(supportBlockPosition)) {
+            return PLACE_PROTECTION;
         }
         return -1;
     }

@@ -332,87 +332,38 @@ public class SelfDestruct extends Module {
     }
 
     private static void releaseDashboardResources(StringMemoryAccess memory) {
-        if (memory == null) {
-            return;
-        }
         try {
-            Field svgField = DashboardController.class.getDeclaredField("svgTextures");
-            Object svgCache = memory.readObject(svgField, DashboardController.INSTANCE);
-            if (svgCache instanceof AutoCloseable closeable) {
-                closeable.close();
-            }
-            memory.clearReference(svgField, DashboardController.INSTANCE);
+            DashboardController.INSTANCE.disposeResources();
         } catch (Throwable ignored) {
         }
         try {
-            Field iconsField = DashboardController.class.getDeclaredField("serverIcons");
-            Object rawIcons = memory.readObject(iconsField, DashboardController.INSTANCE);
-            if (rawIcons instanceof Map<?, ?> icons) {
-                RenderDevice device = ClumpsClient.renderDevice;
-                if (device != null) {
-                    for (Object value : icons.values()) {
-                        if (value instanceof TextureView view && view.texture != null) {
-                            device.release(view.texture);
-                        }
-                    }
-                }
-                icons.clear();
-            }
+            com.blamejared.clumps.client.config.CloudConfigCatalog.clearCache();
+        } catch (Throwable ignored) {
+        }
+        try {
+            com.blamejared.clumps.client.utils.strings.Concat.clearAll();
         } catch (Throwable ignored) {
         }
     }
 
     private static void releaseEntityPreviewRenderer(StringMemoryAccess memory) {
-        if (memory == null) {
-            return;
-        }
         try {
-            Field rendererField = EntityPreviewRenderer.class.getDeclaredField("renderer");
-            Object renderer = memory.readObject(rendererField, null);
-            if (renderer instanceof AutoCloseable closeable) {
-                closeable.close();
-            }
-            memory.clearReference(rendererField, null);
+            EntityPreviewRenderer.dispose();
         } catch (Throwable ignored) {
         }
     }
 
     private static void releaseUiRendererExtras(UiRenderer uiRenderer, StringMemoryAccess memory) {
-        if (memory == null) {
-            return;
-        }
-        try {
-            Field itemsField = UiRenderer.class.getDeclaredField("items");
-            Object items = memory.readObject(itemsField, uiRenderer);
-            if (items != null) {
-                items.getClass().getMethod("clear").invoke(items);
+        if (uiRenderer != null) {
+            try {
+                uiRenderer.clearItemCache();
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
         }
     }
 
     private static void releaseWorldRendererExtras(WorldRenderContext worldRenderer, RenderDevice device, StringMemoryAccess memory) {
-        if (memory == null || device == null) {
-            return;
-        }
-        releaseDeviceResourceField(worldRenderer, "worldColorTexture", device, memory);
-        releaseDeviceResourceField(worldRenderer, "cameraUniforms", device, memory);
-        releaseDeviceResourceField(worldRenderer, "compositionUniforms", device, memory);
-    }
-
-    private static void releaseDeviceResourceField(Object owner, String fieldName, RenderDevice device, StringMemoryAccess memory) {
-        try {
-            Field field = owner.getClass().getDeclaredField(fieldName);
-            Object resource = memory.readObject(field, owner);
-            if (resource instanceof Texture texture) {
-                device.release(texture);
-                memory.clearReference(field, owner);
-            } else if (resource instanceof com.blamejared.clumps.client.gfx.buffer.Buffer buffer) {
-                device.release(buffer);
-                memory.clearReference(field, owner);
-            }
-        } catch (Throwable ignored) {
-        }
+        // WorldRenderContext.destroy() now directly releases worldColorTexture, cameraUniforms, and compositionUniforms.
     }
 
     private static void clearEventAndInputCaches() {

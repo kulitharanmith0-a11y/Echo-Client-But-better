@@ -155,6 +155,12 @@ public final class DashboardController {
     private static final String REFRESH_CLOUD_LABEL = "Refresh";
     private static final String SYNCING_CLOUD_LABEL = "Syncing...";
     private static final String CONFIGS_CLOUD_REFRESH_INPUT_ID = "configs/cloud-refresh";
+    private static final String CONFIGS_CLOUD_ALL_INPUT_ID = "configs/cloud-filter-all";
+    private static final String CONFIGS_CLOUD_GHOST_INPUT_ID = "configs/cloud-filter-ghost";
+    private static final String CONFIGS_CLOUD_RAGE_INPUT_ID = "configs/cloud-filter-rage";
+    private static final String CONFIGS_CLOUD_KEEP_BINDS_INPUT_ID = "configs/cloud-keep-binds";
+    private static final String CLICKGUI_BROWSE_MEDIA_INPUT_ID = "clickgui/browse-media";
+    private static final String CLICKGUI_CLEAR_MEDIA_INPUT_ID = "clickgui/clear-media";
     private static final String CODE_COPIED_STATUS = "Code copied!";
     private static final String MONTHS_AGO_SUFFIX = "mo ago";
     private static final String WEEKS_AGO_SUFFIX = "w ago";
@@ -426,6 +432,8 @@ public final class DashboardController {
     private String copiesSourceName;
     private float copiesFilterWidth;
     private float configScroll;
+    private int cloudTypeFilter;
+    private final GuiBackgroundMedia backgroundMedia = new GuiBackgroundMedia();
     private String importCodeFeedback = "";
     private long importCodeFeedbackUntilMs;
     private final List<ScriptCard> scriptCards;
@@ -456,6 +464,8 @@ public final class DashboardController {
     private String numericText;
     private TextSetting textSetting;
     private String settingText;
+    private boolean focusedTextSelectedAll;
+    private String selectedCloudPresetId;
     private MultiChoiceSetting searchedMultiChoice;
     private final Map<UiId, Float> multiChoiceScroll;
     private final Map<Module, Float> featureBindWidths;
@@ -760,6 +770,11 @@ public final class DashboardController {
             renderer.drawBackdrop(renderer.halfResolutionBackdrop, 0.0f, 0.0f, width, height, 0.0f, backgroundProgress * closingOpacity);
         }
         renderer.drawRoundedRect(0.0f, 0.0f, width, height, 0.0f, DashboardColors.multiplyAlpha(ClickGui.backgroundDimArgb(), backgroundProgress * closingOpacity));
+        if (ClickGui.hasBackgroundMedia() && !ClickGui.clipBackgroundMediaToGui()) {
+            backgroundMedia.render(renderer, 0.0f, 0.0f, width, height, 0.0f,
+                    ClickGui.backgroundMediaOpacityValue() * backgroundProgress * closingOpacity);
+            renderer.flush();
+        }
 
         float sidebarProgress = easedProgress(openedAtNanos, 220);
         localOffsetY = 4.0f * (1.0f - sidebarProgress);
@@ -774,6 +789,11 @@ public final class DashboardController {
         float contentProgress = easedProgress(openedAtNanos + 35_000_000L, 220);
         localOffsetY = 4.0f * (1.0f - contentProgress);
         renderer.pushScissor(renderX(330.0f), renderY(30.0f), renderSize(1560.0f), renderSize(1020.0f));
+        if (ClickGui.hasBackgroundMedia() && ClickGui.clipBackgroundMediaToGui()) {
+            backgroundMedia.render(renderer, renderX(330.0f), renderY(30.0f), renderSize(1560.0f), renderSize(1020.0f),
+                    renderSize(12.0f), ClickGui.backgroundMediaOpacityValue() * visible);
+            renderer.flush();
+        }
         localOffsetX = slideX;
         layerOpacity = pageProgress * contentProgress;
         switch (page) {
@@ -1219,14 +1239,7 @@ public final class DashboardController {
         float importTextX = 690.0f + (114.0f - painter(renderer).textWidth(FontAsset.INTER, importLabel, 13.0f)) * 0.5f;
         painter(renderer).text(FontAsset.INTER, importLabel, importTextX, 123.0f, 13.0f, feedbackActive || importHovered ? -1 : -637534209);
         if (browsePublicConfigs && !autoConfigTabActive) {
-            boolean refreshing = CloudConfigCatalog.isRefreshing();
-            boolean refreshHovered = containsPointer(816.0f, 112.0f, 92.0f, 37.0f);
-            String refreshLabel = refreshing ? SYNCING_CLOUD_LABEL : REFRESH_CLOUD_LABEL;
-            painter(renderer).panel(816.0f, 112.0f, 92.0f, 37.0f, 8.0f,
-                    refreshHovered ? 234881023 : 184549375,
-                    1.0f, refreshHovered ? 536870911 : 268435455);
-            float refreshTextX = 816.0f + (92.0f - painter(renderer).textWidth(FontAsset.INTER, refreshLabel, 13.0f)) * 0.5f;
-            painter(renderer).text(FontAsset.INTER, refreshLabel, refreshTextX, 123.0f, 13.0f, refreshHovered ? -1 : -637534209);
+            renderCloudSplitToolbarRight(renderer);
         }
         if (autoConfigTabActive) {
             DashboardTransform transform = new DashboardTransform(viewportLeft, viewportTop, viewportScale, zoom, animationScale, pivotX, pivotY, localOffsetX, localOffsetY, verticalOffset);
@@ -1241,6 +1254,10 @@ public final class DashboardController {
             return;
         }
         List<ConfigCard> cards = filteredConfigs();
+        if (browsePublicConfigs) {
+            renderCloudSplitBrowser(renderer, cards);
+            return;
+        }
         new DashboardWidgetRenderer(painter(renderer)).rightAlignedText(FontAsset.INTER, cards.size() + CONFIG_COUNT_SUFFIX, 1866.0f, 123.0f, 13.0f, 1728053247);
         if (copiesSourceId != null) {
             String label = COPIES_OF_PREFIX + copiesSourceName;
@@ -1251,7 +1268,9 @@ public final class DashboardController {
             drawGlyph(renderer, 57778, 816.0f + copiesFilterWidth - 28.0f, 122.0f, 14.0f, hovered ? -1 : -2130706433);
         }
         configScroll = Math.max(0.0f, Math.min(configScroll, maximumConfigScroll(cards.size())));
-        renderer.pushScissor(renderX(330.0f), renderY(157.0f), renderSize(1560.0f), renderSize(885.0f));
+        float listTop = 157.0f;
+        float listHeight = 1042.0f - listTop;
+        renderer.pushScissor(renderX(330.0f), renderY(listTop), renderSize(1560.0f), renderSize(listHeight));
         for (int index = 0; index < cards.size(); index++) {
             float y = configCardY(index);
             if (configCardVisible(y)) renderConfigCard(renderer, cards.get(index), 354 + index % 3 * 509, y);
@@ -1264,24 +1283,348 @@ public final class DashboardController {
         renderer.popScissor();
     }
 
+    private void renderCloudSplitToolbarRight(UiRenderer renderer) {
+        // Segmented mode pills: All | Ghost | Rage (x=1456..1644, y=112..149)
+        painter(renderer).panel(1456.0f, 112.0f, 188.0f, 37.0f, 8.0f, 0xFF131318, 1.0f, 0xFF26262F);
+        renderMonoModePill(renderer, 1460.0f, 115.0f, 50.0f, 31.0f, "All", cloudTypeFilter == 0);
+        renderMonoModePill(renderer, 1514.0f, 115.0f, 64.0f, 31.0f, "Ghost", cloudTypeFilter == 1);
+        renderMonoModePill(renderer, 1582.0f, 115.0f, 58.0f, 31.0f, "Rage", cloudTypeFilter == 2);
+
+        // Keep Binds label + monochrome pill switch (x=1662..1796, y=112..149)
+        boolean keepBinds = com.blamejared.clumps.client.config.ModuleConfig.isPreserveBindsOnCloudLoad();
+        boolean bindsHovered = containsPointer(1662.0f, 112.0f, 134.0f, 37.0f);
+        painter(renderer).text(FontAsset.INTER, "Keep Binds", 1666.0f, 123.0f, 13.0f,
+                keepBinds || bindsHovered ? -1 : -637534209);
+        renderMonoToggleSwitch(renderer, 1748.0f, 120.5f, 42.0f, 20.0f, keepBinds);
+
+        // Sync button (x=1808..1866, y=112..149)
+        boolean refreshing = CloudConfigCatalog.isRefreshing();
+        boolean refreshHovered = containsPointer(1808.0f, 112.0f, 58.0f, 37.0f);
+        String syncLabel = refreshing ? "..." : "Sync";
+        painter(renderer).panel(1808.0f, 112.0f, 58.0f, 37.0f, 8.0f,
+                refreshHovered ? 0xFF22222B : 0xFF14141A, 1.0f, refreshHovered ? 0xFF444452 : 0xFF26262F);
+        float rx = 1808.0f + (58.0f - painter(renderer).textWidth(FontAsset.INTER, syncLabel, 12.5f)) * 0.5f;
+        painter(renderer).text(FontAsset.INTER, syncLabel, rx, 123.0f, 12.5f, refreshHovered ? -1 : -637534209);
+    }
+
+    private void renderMonoModePill(UiRenderer renderer, float x, float y, float w, float h, String label, boolean active) {
+        boolean hovered = containsPointer(x, y, w, h);
+        if (active) {
+            painter(renderer).panel(x, y, w, h, 6.0f, 0xFF292932, 1.0f, 0xFF3E3E4B);
+        } else if (hovered) {
+            painter(renderer).roundedRect(x, y, w, h, 6.0f, 0x18FFFFFF);
+        }
+        float tx = x + (w - painter(renderer).textWidth(FontAsset.INTER, label, 12.5f)) * 0.5f;
+        painter(renderer).text(FontAsset.INTER, label, tx, y + 8.0f, 12.5f, active || hovered ? -1 : 0xFF8C8C98);
+    }
+
+    private void renderMonoToggleSwitch(UiRenderer renderer, float x, float y, float w, float h, boolean enabled) {
+        int trackFill = enabled ? 0xFF484856 : 0xFF202028;
+        int trackBorder = enabled ? 0xFF6A6A7A : 0xFF32323E;
+        painter(renderer).panel(x, y, w, h, h * 0.5f, trackFill, 1.0f, trackBorder);
+        float knobSize = h - 6.0f;
+        float knobX = enabled ? (x + w - knobSize - 3.0f) : (x + 3.0f);
+        painter(renderer).roundedRect(knobX, y + 3.0f, knobSize, knobSize, knobSize * 0.5f, enabled ? 0xFFF4F4F8 : 0xFF8E8E9B);
+    }
+
+    private ConfigCard resolveSelectedCloudCard(List<ConfigCard> cards) {
+        if (cards == null || cards.isEmpty()) {
+            return null;
+        }
+        if (selectedCloudPresetId != null) {
+            for (ConfigCard card : cards) {
+                if (selectedCloudPresetId.equals(card.id)) {
+                    return card;
+                }
+            }
+        }
+        ConfigCard first = cards.get(0);
+        selectedCloudPresetId = first.id;
+        return first;
+    }
+
+    private DashboardIcon cloudRowIcon(ConfigCard card) {
+        String lower = (card.name + " " + card.description).toLowerCase(Locale.ROOT);
+        if (RAGE_TYPE_ID.equalsIgnoreCase(card.type)) return DashboardIcon.DANGER;
+        if (lower.contains("mace") || lower.contains("crystal") || lower.contains("cart") || lower.contains("pvp")) {
+            return DashboardIcon.COMBAT;
+        }
+        if (lower.contains("ghost") || lower.contains("legit") || lower.contains("closet")) {
+            return DashboardIcon.GHOST;
+        }
+        return DashboardIcon.PUBLIC;
+    }
+
+    private void renderCloudSplitBrowser(UiRenderer renderer, List<ConfigCard> cards) {
+        float listX = 354.0f;
+        float listY = 168.0f;
+        float listW = 972.0f;
+        float listH = 862.0f;
+        float rowH = 92.0f;
+        float rowStride = 106.0f;
+
+        ConfigCard inspected = resolveSelectedCloudCard(cards);
+        configScroll = Math.max(0.0f, Math.min(configScroll, maximumConfigScroll(cards.size())));
+
+        renderer.pushScissor(renderX(listX - 2.0f), renderY(listY - 2.0f), renderSize(listW + 4.0f), renderSize(listH + 4.0f));
+        if (cards.isEmpty()) {
+            String emptyMsg = CloudConfigCatalog.isRefreshing()
+                    ? "Syncing community configs..."
+                    : "No cloud configs match your search or filter.";
+            painter(renderer).panel(listX, listY, listW, 120.0f, 10.0f, 0xFF111116, 1.0f, 0xFF22222B);
+            float ew = painter(renderer).textWidth(FontAsset.INTER, emptyMsg, 14.0f);
+            painter(renderer).text(FontAsset.INTER, emptyMsg, listX + (listW - ew) * 0.5f, listY + 51.0f, 14.0f, 0xFF8A8A96);
+        } else {
+            for (int index = 0; index < cards.size(); index++) {
+                ConfigCard card = cards.get(index);
+                float y = listY + index * rowStride - configScroll;
+                if (y + rowH < listY - 8.0f || y > listY + listH + 8.0f) continue;
+
+                boolean isInspected = inspected != null && card.id.equals(inspected.id);
+                boolean hovered = containsPointer(listX, y, listW, rowH);
+                int rowFill = isInspected ? 0xFF191920 : hovered ? 0xFF15151B : 0xFF111116;
+                int rowBorder = isInspected ? 0xFF727280 : hovered ? 0xFF3A3A46 : 0xFF22222B;
+                painter(renderer).panel(listX, y, listW, rowH, 10.0f, rowFill, 1.0f, rowBorder);
+
+                // Left icon tile (52x52)
+                painter(renderer).panel(listX + 18.0f, y + 20.0f, 52.0f, 52.0f, 8.0f, 0xFF1A1A22, 1.0f, 0xFF282833);
+                if (card.serverIcon != null) {
+                    renderer.drawImage(card.serverIcon, renderX(listX + 26.0f), renderY(y + 28.0f),
+                            renderSize(36.0f), renderSize(36.0f), renderSize(6.0f),
+                            Math.max(0.0f, Math.min(1.0f, openingOpacity * layerOpacity)));
+                } else {
+                    painter(renderer).icon(cloudRowIcon(card), listX + 34.0f, y + 36.0f, 20.0f, 20.0f, 1.0f,
+                            isInspected ? -1 : 0xFFB8B8C4);
+                }
+
+                // Title & subtitle
+                String title = truncateText(card.name, FontAsset.INTER_SEMI_BOLD, 17.0f, listW - 220.0f);
+                painter(renderer).text(FontAsset.INTER_SEMI_BOLD, title, listX + 86.0f, y + 23.0f, 17.0f, -1);
+
+                String metaLine = buildCloudMetaLine(card);
+                String metaClipped = truncateText(metaLine, FontAsset.INTER, 13.0f, listW - 220.0f);
+                painter(renderer).text(FontAsset.INTER, metaClipped, listX + 86.0f, y + 49.0f, 13.0f, 0xFF8A8A96);
+
+                // Right mode badge ("Ghost" / "Rage")
+                boolean isRage = RAGE_TYPE_ID.equalsIgnoreCase(card.type);
+                String modeLabel = isRage ? "Rage" : "Ghost";
+                float badgeW = 66.0f;
+                float badgeX = listX + listW - badgeW - 18.0f;
+                painter(renderer).panel(badgeX, y + 31.0f, badgeW, 30.0f, 6.0f, 0xFF1B1B22, 1.0f,
+                        isRage ? 0xFF422C33 : 0xFF2E2E3A);
+                float mw = painter(renderer).textWidth(FontAsset.INTER, modeLabel, 12.5f);
+                painter(renderer).text(FontAsset.INTER, modeLabel, badgeX + (badgeW - mw) * 0.5f, y + 39.0f, 12.5f,
+                        isRage ? 0xFFE8B4BE : 0xFFD4D4DC);
+
+                // Selected / Active crisp white dot indicator
+                if (isInspected || card.selected) {
+                    painter(renderer).roundedRect(badgeX - 24.0f, y + 41.0f, 10.0f, 10.0f, 5.0f,
+                            card.selected ? 0xFF34D399 : 0xFFFFFFFF);
+                }
+            }
+        }
+        renderer.popScissor();
+
+        // Right Detail Inspector Panel (x=1350..1866, w=516, y=168, h=534)
+        float inspX = 1350.0f;
+        float inspY = 168.0f;
+        float inspW = 516.0f;
+        float inspH = 534.0f;
+        painter(renderer).panel(inspX, inspY, inspW, inspH, 12.0f, 0xFF111116, 1.0f, 0xFF24242E);
+        if (inspected == null) {
+            String hint = "Select a preset to inspect details";
+            float hw = painter(renderer).textWidth(FontAsset.INTER, hint, 13.5f);
+            painter(renderer).text(FontAsset.INTER, hint, inspX + (inspW - hw) * 0.5f, inspY + 250.0f, 13.5f, 0xFF7A7A88);
+            return;
+        }
+
+        float ix = inspX + 28.0f;
+        float iw = inspW - 56.0f;
+        boolean isRage = RAGE_TYPE_ID.equalsIgnoreCase(inspected.type);
+        String modeLabel = isRage ? "Rage" : "Ghost";
+
+        String inspTitle = truncateText(inspected.name, FontAsset.INTER_SEMI_BOLD, 21.0f, iw - 82.0f);
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, inspTitle, ix, inspY + 28.0f, 21.0f, -1);
+
+        float pillW = 66.0f;
+        float pillX = ix + iw - pillW;
+        painter(renderer).panel(pillX, inspY + 26.0f, pillW, 28.0f, 6.0f, 0xFF1B1B22, 1.0f,
+                isRage ? 0xFF422C33 : 0xFF30303C);
+        float pw = painter(renderer).textWidth(FontAsset.INTER, modeLabel, 12.5f);
+        painter(renderer).text(FontAsset.INTER, modeLabel, pillX + (pillW - pw) * 0.5f, inspY + 33.5f, 12.5f,
+                isRage ? 0xFFE8B4BE : 0xFFD8D8E2);
+
+        String sub = buildCloudMetaLine(inspected);
+        painter(renderer).text(FontAsset.INTER, truncateText(sub, FontAsset.INTER, 13.0f, iw), ix, inspY + 60.0f, 13.0f, 0xFF8A8A96);
+        drawRule(renderer, ix, inspY + 90.0f, iw, 1.0f, 0xFF22222B);
+
+        // Description (up to 4 wrapped lines)
+        String desc = (inspected.description == null || inspected.description.isBlank())
+                ? "Community preset tuned for competitive play."
+                : inspected.description.trim();
+        List<String> lines = wrapCloudText(desc, FontAsset.INTER, 13.5f, iw, 4);
+        float descY = inspY + 108.0f;
+        for (String line : lines) {
+            painter(renderer).text(FontAsset.INTER, line, ix, descY, 13.5f, 0xFFB8B8C4);
+            descY += 21.0f;
+        }
+
+        // INCLUDED MODULES chip grid
+        float modsTitleY = inspY + 206.0f;
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, "INCLUDED MODULES", ix, modsTitleY, 11.0f, 0xFF7A7A88);
+        List<String> mods = CloudConfigCatalog.includedModules(inspected.id);
+        if (mods.isEmpty()) {
+            mods = List.of(isRage ? "Rage Preset" : "Ghost Preset", "Community Config");
+        }
+        float chipX = ix;
+        float chipY = modsTitleY + 22.0f;
+        int chipRows = 0;
+        for (String mod : mods) {
+            float chipW = Math.min(iw, painter(renderer).textWidth(FontAsset.INTER, mod, 12.0f) + 20.0f);
+            if (chipX > ix && chipX + chipW > ix + iw) {
+                chipX = ix;
+                chipY += 35.0f;
+                chipRows++;
+                if (chipRows >= 3) break;
+            }
+            painter(renderer).panel(chipX, chipY, chipW, 27.0f, 6.0f, 0xFF181820, 1.0f, 0xFF2B2B36);
+            painter(renderer).text(FontAsset.INTER, mod, chipX + 10.0f, chipY + 6.5f, 12.0f, 0xFFE0E0E8);
+            chipX += chipW + 8.0f;
+        }
+
+        drawRule(renderer, ix, inspY + 344.0f, iw, 1.0f, 0xFF22222B);
+
+        // Keep My Keybinds inline toggle row
+        boolean keepBinds = com.blamejared.clumps.client.config.ModuleConfig.isPreserveBindsOnCloudLoad();
+        boolean inspBindsHover = containsPointer(ix, inspY + 354.0f, iw, 38.0f);
+        painter(renderer).text(FontAsset.INTER, "Keep My Keybinds", ix, inspY + 365.0f, 13.5f,
+                keepBinds || inspBindsHover ? -1 : 0xFFD0D0DC);
+        renderMonoToggleSwitch(renderer, ix + iw - 42.0f, inspY + 363.0f, 42.0f, 21.0f, keepBinds);
+
+        // Primary CTA Row: Load Config (white) + Save Copy (matte dark)
+        float btnY = inspY + 412.0f;
+        float btnW = (iw - 12.0f) * 0.5f;
+        String activeStatus = statusMessageFor(inspected.id);
+        boolean loadHover = containsPointer(ix, btnY, btnW, 46.0f);
+        String loadLabel = activeStatus != null && activeStatus.contains("Loaded") ? activeStatus : "Load Config";
+        painter(renderer).panel(ix, btnY, btnW, 46.0f, 8.0f,
+                loadHover ? 0xFFFFFFFF : 0xFFF0F0F4, 1.0f, 0xFFFFFFFF);
+        float lw = painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, loadLabel, 14.0f);
+        painter(renderer).text(FontAsset.INTER_SEMI_BOLD, loadLabel, ix + (btnW - lw) * 0.5f, btnY + 14.5f, 14.0f, 0xFF0D0D10);
+
+        float saveX = ix + btnW + 12.0f;
+        boolean saveHover = containsPointer(saveX, btnY, btnW, 46.0f);
+        String saveLabel = activeStatus != null && activeStatus.contains("Saved") ? activeStatus : "Save Copy";
+        painter(renderer).panel(saveX, btnY, btnW, 46.0f, 8.0f,
+                saveHover ? 0xFF23232D : 0xFF191921, 1.0f, saveHover ? 0xFF454555 : 0xFF2E2E3B);
+        float sw = painter(renderer).textWidth(FontAsset.INTER, saveLabel, 14.0f);
+        painter(renderer).text(FontAsset.INTER, saveLabel, saveX + (btnW - sw) * 0.5f, btnY + 14.5f, 14.0f, -1);
+
+        // Secondary Utility Button: Copy Share Code
+        float codeY = btnY + 58.0f;
+        boolean codeHover = containsPointer(ix, codeY, iw, 36.0f);
+        String codeLabel = activeStatus != null && activeStatus.contains("Copied") ? activeStatus : "Copy Share Code";
+        painter(renderer).panel(ix, codeY, iw, 36.0f, 7.0f,
+                codeHover ? 0xFF1F1F28 : 0xFF15151C, 1.0f, codeHover ? 0xFF3E3E4C : 0xFF262631);
+        float cw = painter(renderer).textWidth(FontAsset.INTER, codeLabel, 12.5f);
+        painter(renderer).text(FontAsset.INTER, codeLabel, ix + (iw - cw) * 0.5f, codeY + 10.0f, 12.5f,
+                codeHover ? -1 : 0xFFA4A4B2);
+    }
+
+    private String statusMessageFor(String cardId) {
+        if (cardId != null && cardId.equals(statusConfigId)
+                && System.currentTimeMillis() - statusStartedAtMillis < 2400L
+                && statusMessage != null && !statusMessage.isEmpty()) {
+            return statusMessage;
+        }
+        return null;
+    }
+
+    private static String buildCloudMetaLine(ConfigCard card) {
+        StringBuilder sb = new StringBuilder();
+        if (card.serverLabel != null && !card.serverLabel.isBlank()) {
+            sb.append(card.serverLabel.trim());
+        }
+        if (card.author != null && !card.author.isBlank()) {
+            if (!sb.isEmpty()) sb.append("  •  ");
+            sb.append("by ").append(card.author.trim());
+        }
+        if (card.updatedLabel != null && !card.updatedLabel.isBlank()) {
+            if (!sb.isEmpty()) sb.append("  •  ");
+            sb.append(card.updatedLabel.trim());
+        }
+        return sb.isEmpty() ? "Community Preset" : sb.toString();
+    }
+
+    private String truncateText(String text, FontAsset font, float size, float maxWidth) {
+        if (text == null || text.isEmpty()) return "";
+        if (painter(ClumpsClient.uiRenderer).textWidth(font, text, size) <= maxWidth) return text;
+        int end = text.length();
+        while (end > 1 && painter(ClumpsClient.uiRenderer).textWidth(font, text.substring(0, end) + "...", size) > maxWidth) {
+            end--;
+        }
+        return text.substring(0, end) + "...";
+    }
+
+    private List<String> wrapCloudText(String text, FontAsset font, float size, float maxWidth, int maxLines) {
+        List<String> lines = new ArrayList<>();
+        if (text == null || text.isEmpty()) return lines;
+        String[] words = text.split("\\s+");
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < words.length; i++) {
+            String word = words[i];
+            String candidate = current.isEmpty() ? word : current + " " + word;
+            if (painter(ClumpsClient.uiRenderer).textWidth(font, candidate, size) <= maxWidth) {
+                current.setLength(0);
+                current.append(candidate);
+            } else {
+                if (!current.isEmpty()) {
+                    lines.add(current.toString());
+                    if (lines.size() >= maxLines) {
+                        lines.set(maxLines - 1, truncateText(lines.get(maxLines - 1) + " " + word, font, size, maxWidth));
+                        return lines;
+                    }
+                    current.setLength(0);
+                }
+                current.append(truncateText(word, font, size, maxWidth));
+            }
+        }
+        if (!current.isEmpty() && lines.size() < maxLines) {
+            lines.add(current.toString());
+        }
+        return lines;
+    }
+
     private static boolean configsAvailable() { return ClumpsClient.ModuleConfig != null && ClumpsClient.ModuleConfig.isAvailable(); }
     private boolean canShowNewConfigCard() { return !browsePublicConfigs && copiesSourceId == null; }
-    private float configCardY(int index) { return 165.0f + index / 3 * 160 - configScroll; }
-    private static boolean configCardVisible(float y) { return y + 144.0f >= 157.0f && y <= 1042.0f; }
+    private float configCardHeight() { return 144.0f; }
+    private float configCardStride() { return 160.0f; }
+    private float configCardY(int index) {
+        return 165.0f + index / 3 * configCardStride() - configScroll;
+    }
+    private boolean configCardVisible(float y) {
+        return y + configCardHeight() >= 157.0f && y <= 1042.0f;
+    }
     private float maximumConfigScroll(int count) {
+        if (browsePublicConfigs) {
+            return Math.max(0.0f, count * 106.0f - 14.0f - 862.0f);
+        }
         int cells = count + (canShowNewConfigCard() ? 1 : 0);
         int rows = (cells + 2) / 3;
-        return Math.max(0.0f, rows * 160 - 16 - 877.0f);
+        return Math.max(0.0f, rows * configCardStride() - 16.0f - 877.0f);
     }
     private List<ConfigCard> filteredConfigs() {
         String query = configSearch.toLowerCase(Locale.ROOT).trim();
         List<ConfigCard> result = new ArrayList<>();
         for (ConfigCard card : configCards) {
             if (browsePublicConfigs != card.publicVisibility) continue;
+            if (browsePublicConfigs && cloudTypeFilter == 1 && RAGE_TYPE_ID.equalsIgnoreCase(card.type)) continue;
+            if (browsePublicConfigs && cloudTypeFilter == 2 && !RAGE_TYPE_ID.equalsIgnoreCase(card.type)) continue;
             if (!browsePublicConfigs && copiesSourceId != null && !copiesSourceId.equals(card.sourceId)) continue;
             if (!query.isEmpty() && !card.name.toLowerCase(Locale.ROOT).contains(query)
                     && !card.serverLabel.toLowerCase(Locale.ROOT).contains(query)
-                    && !card.author.toLowerCase(Locale.ROOT).contains(query)) continue;
+                    && !card.author.toLowerCase(Locale.ROOT).contains(query)
+                    && !card.description.toLowerCase(Locale.ROOT).contains(query)) continue;
             result.add(card);
         }
         return result;
@@ -1290,12 +1633,19 @@ public final class DashboardController {
     private ConfigCardRules configRules() { return new ConfigCardRules(configCards, DashboardController::configsAvailable); }
 
     private void renderConfigCard(UiRenderer renderer, ConfigCard card, float x, float y) {
-        renderCardBackground(renderer, CONFIG_CARD_PREFIX + card.id, x, y, 493.0f, 144.0f, card.selected);
-        painter(renderer).roundedRect(x + 16.0f, y + 16.0f, 24.0f, 24.0f, 6.0f, 268435455);
+        boolean cloudCard = card.publicVisibility;
+        float cardH = cloudCard ? 162.0f : 144.0f;
+        renderCardBackground(renderer, CONFIG_CARD_PREFIX + card.id, x, y, 493.0f, cardH, card.selected);
+        if (cloudCard) {
+            boolean isRage = RAGE_TYPE_ID.equalsIgnoreCase(card.type);
+            int stripeColor = isRage ? 0xCCF43F5E : ((0xCC << 24) | (ClickGui.accentArgb() & 0x00FFFFFF));
+            painter(renderer).roundedRect(x + 12.0f, y + 1.0f, 469.0f, 2.5f, 1.25f, stripeColor);
+        }
+        painter(renderer).roundedRect(x + 16.0f, y + 16.0f, 24.0f, 24.0f, 6.0f, cloudCard ? 0x2A38BDF8 : 268435455);
         if (card.serverIcon != null) {
             renderer.drawImage(card.serverIcon, renderX(x + 16.0f), renderY(y + 16.0f), renderSize(24.0f), renderSize(24.0f), renderSize(6.0f), Math.max(0.0f, Math.min(1.0f, openingOpacity * layerOpacity)));
         } else {
-            painter(renderer).icon(DashboardIcon.WORLD, x + 21.0f, y + 21.0f, 14.0f, 14.0f, 1.0f, -1);
+            painter(renderer).icon(cloudCard ? DashboardIcon.PUBLIC : DashboardIcon.WORLD, x + 21.0f, y + 21.0f, 14.0f, 14.0f, 1.0f, -1);
         }
         painter(renderer).text(FontAsset.INTER_SEMI_BOLD, card.name, x + 48.0f, y + 19.5f, 15.0f, -1);
         float badgeRight = x + 477.0f;
@@ -1311,14 +1661,23 @@ public final class DashboardController {
             painter(renderer).roundedRect(badgeRight - 65.0f, y + 17.0f, 65.0f, 22.0f, 4.0f, 268435455);
             painter(renderer).roundedRect(badgeRight - 57.0f, y + 25.0f, 6.0f, 6.0f, 3.0f, -637534209);
             painter(renderer).text(FontAsset.INTER, ACTIVE_CONFIG_LABEL, badgeRight - 45.0f, y + 21.0f, 12.0f, -637534209);
-        } else if (card.publicVisibility) {
+        } else if (cloudCard) {
+            boolean isRage = RAGE_TYPE_ID.equalsIgnoreCase(card.type);
+            String typeLabel = isRage ? "RAGE" : "GHOST";
+            float typeW = painter(renderer).textWidth(FontAsset.INTER_SEMI_BOLD, typeLabel, 10.5f) + 16.0f;
+            int typeBg = isRage ? 0x33F43F5E : 0x3334D399;
+            int typeFg = isRage ? 0xFFFDA4AF : 0xFF6EE7B7;
+            painter(renderer).roundedRect(badgeRight - typeW, y + 17.0f, typeW, 22.0f, 5.0f, typeBg);
+            painter(renderer).text(FontAsset.INTER_SEMI_BOLD, typeLabel, badgeRight - typeW + 8.0f, y + 21.5f, 10.5f, typeFg);
+            badgeRight -= typeW + 6.0f;
+
             int copies = card.owned ? 0 : rules.copyCount(card);
             String label = card.owned ? OWN_CONFIG_LABEL : copies > 1 ? copies + CONFIG_COPIES_SUFFIX
                     : copies == 1 ? ADDED_CONFIG_LABEL : "";
             if (!label.isEmpty()) {
-                float width = painter(renderer).textWidth(FontAsset.INTER, label, 12.0f) + 20.0f;
+                float width = painter(renderer).textWidth(FontAsset.INTER, label, 12.0f) + 18.0f;
                 painter(renderer).roundedRect(badgeRight - width, y + 17.0f, width, 22.0f, 4.0f, 268435455);
-                painter(renderer).text(FontAsset.INTER, label, badgeRight + 10.0f - width, y + 21.0f, 12.0f, -637534209);
+                painter(renderer).text(FontAsset.INTER, label, badgeRight + 9.0f - width, y + 21.0f, 12.0f, -637534209);
             }
         }
         float textRight = x + 477.0f;
@@ -1332,18 +1691,25 @@ public final class DashboardController {
             float width = painter(renderer).textWidth(FontAsset.INTER, label, 12.0f);
             if (textX + (first ? 0 : 11) + width > textRight) break;
             if (!first) {
-                painter(renderer).roundedRect(textX, y + 59.5f, 3.0f, 3.0f, 1.5f, -2130706433);
+                painter(renderer).roundedRect(textX, y + 56.5f, 3.0f, 3.0f, 1.5f, -2130706433);
                 textX += 11.0f;
             }
-            painter(renderer).text(FontAsset.INTER, label, textX, y + 54.0f, 12.0f, -2130706433);
+            painter(renderer).text(FontAsset.INTER, label, textX, y + 51.0f, 12.0f, -2130706433);
             textX += width + 8.0f;
             first = false;
         }
-        drawRule(renderer, x + 16.0f, y + 82.0f, 461.0f, 1.0f, -14671840);
+        if (cloudCard) {
+            String desc = card.description == null || card.description.isBlank()
+                    ? "Community cloud preset ready to install" : card.description.trim();
+            if (desc.length() > 64) desc = desc.substring(0, 61) + "...";
+            painter(renderer).text(FontAsset.INTER, desc, x + 16.0f, y + 73.0f, 12.0f, 0xB8CBD5E1);
+        }
+        float buttonOffsetY = cloudCard ? 18.0f : 0.0f;
+        drawRule(renderer, x + 16.0f, y + 82.0f + buttonOffsetY, 461.0f, 1.0f, -14671840);
         ConfigPrimaryAction primary = rules.primaryAction(card);
         ConfigPrimaryAction secondary = secondaryConfigAction(card);
-        renderConfigButton(renderer, card, primary, ConfigCardLayout.primaryButton(x, y, secondary), true);
-        if (secondary != null) renderConfigButton(renderer, card, secondary, ConfigCardLayout.secondaryButton(x, y, secondary), secondary.isGetUpdate());
+        renderConfigButton(renderer, card, primary, ConfigCardLayout.primaryButton(x, y + buttonOffsetY, secondary), true);
+        if (secondary != null) renderConfigButton(renderer, card, secondary, ConfigCardLayout.secondaryButton(x, y + buttonOffsetY, secondary), secondary.isGetUpdate());
     }
 
     private ConfigPrimaryAction secondaryConfigAction(ConfigCard card) {
@@ -2094,17 +2460,56 @@ public final class DashboardController {
 
     private void renderTextSetting(UiRenderer renderer, CharSequence label, float x, float y, TextSetting setting) {
         painter(renderer).text(FontAsset.INTER, label, x, y + 8.0f, 13.0f, -1);
+        boolean isMediaPath = setting == ClickGui.backgroundMediaPath;
+        if (isMediaPath) {
+            String note = backgroundMedia.statusNote();
+            if (note != null && !note.isEmpty()) {
+                new DashboardWidgetRenderer(painter(renderer)).rightAlignedText(FontAsset.INTER, note, x + 476.0f, y + 9.0f, 11.5f, -2130706433);
+            }
+        }
         boolean editing = textFocus == TextInputFocus.SETTING_TEXT && textSetting == setting;
-        painter(renderer).panel(x, y + 30.0f, 476.0f, 32.0f, 5.0f, 234881023, 1.0f, editing ? 1728053247 : -14408668);
+        if (editing && isMediaPath) {
+            String currentVal = setting.getText();
+            if (!currentVal.equals(settingText)) {
+                settingText = currentVal;
+            }
+        }
+        float boxWidth = isMediaPath ? 328.0f : 476.0f;
+        painter(renderer).panel(x, y + 30.0f, boxWidth, 32.0f, 5.0f, 234881023, 1.0f, editing ? 1728053247 : -14408668);
         String text = editing ? settingText : setting.getText();
         String displayed = text.isEmpty() && !editing ? setting.getPlaceholder() : text;
-        renderer.pushScissor(renderX(x), renderY(y + 30.0f), renderSize(476.0f), renderSize(32.0f));
-        painter(renderer).text(FontAsset.INTER, displayed, x + 10.0f, y + 39.0f, 13.0f, text.isEmpty() && !editing ? -2130706433 : -1);
+        float textWidth = painter(renderer).textWidth(FontAsset.INTER, displayed, 13.0f);
+        float maxVisible = boxWidth - 22.0f;
+        float textScrollX = (editing && textWidth > maxVisible) ? (textWidth - maxVisible) : 0.0f;
+        renderer.pushScissor(renderX(x + 4.0f), renderY(y + 30.0f), renderSize(boxWidth - 8.0f), renderSize(32.0f));
+        if (editing && focusedTextSelectedAll && !text.isEmpty()) {
+            float selW = Math.min(maxVisible + 4.0f, textWidth + 4.0f);
+            painter(renderer).roundedRect(x + 8.0f, y + 36.0f, selW, 20.0f, 3.0f, 0x44FFFFFF);
+        }
+        painter(renderer).text(FontAsset.INTER, displayed, x + 10.0f - textScrollX, y + 39.0f, 13.0f, text.isEmpty() && !editing ? -2130706433 : -1);
         if (editing && caretVisible()) {
-            float caretX = x + 10.0f + painter(renderer).textWidth(FontAsset.INTER, text, 13.0f) + 2.0f;
+            float caretX = x + 10.0f - textScrollX + painter(renderer).textWidth(FontAsset.INTER, text, 13.0f) + 2.0f;
             painter(renderer).roundedRect(caretX, y + 37.0f, 1.0f, 16.0f, 0.0f, -1275068417);
         }
         renderer.popScissor();
+
+        if (isMediaPath) {
+            float browseX = x + 334.0f;
+            float clearX = x + 422.0f;
+            boolean browseHovered = containsPointer(browseX, y + 30.0f, 82.0f, 32.0f);
+            String browseLabel = backgroundMedia.isPickerOpen() ? "Open..." : "Browse";
+            painter(renderer).panel(browseX, y + 30.0f, 82.0f, 32.0f, 5.0f,
+                    browseHovered ? 0x28FFFFFF : 0x16FFFFFF, 1.0f, browseHovered ? 0x55FFFFFF : -14408668);
+            float bx = browseX + (82.0f - painter(renderer).textWidth(FontAsset.INTER, browseLabel, 12.5f)) * 0.5f;
+            painter(renderer).text(FontAsset.INTER, browseLabel, bx, y + 39.0f, 12.5f, browseHovered ? -1 : -637534209);
+
+            boolean hasMedia = ClickGui.hasBackgroundMedia();
+            boolean clearHovered = hasMedia && containsPointer(clearX, y + 30.0f, 54.0f, 32.0f);
+            painter(renderer).panel(clearX, y + 30.0f, 54.0f, 32.0f, 5.0f,
+                    clearHovered ? 0x28FFFFFF : 0x10FFFFFF, 1.0f, clearHovered ? 0x55FFFFFF : -14408668);
+            float cx = clearX + (54.0f - painter(renderer).textWidth(FontAsset.INTER, "Clear", 12.0f)) * 0.5f;
+            painter(renderer).text(FontAsset.INTER, "Clear", cx, y + 39.0f, 12.0f, hasMedia ? (clearHovered ? -1 : -637534209) : 0x55FFFFFF);
+        }
     }
 
     private boolean overlapsOtherChoicePopup(ChoiceSetting setting, float x, float y, float width, float height) {
@@ -3151,6 +3556,10 @@ public final class DashboardController {
             return true;
         }
         if (textFocus == TextInputFocus.SETTING_NUMBER) {
+            if (focusedTextSelectedAll) {
+                numericText = "";
+                focusedTextSelectedAll = false;
+            }
             boolean accepted = character >= '0' && character <= '9'
                     || character == '.' && numericText.indexOf('.') < 0
                     && (numericSetting instanceof FloatSetting || numericSetting instanceof FloatRangeSetting || numericSetting instanceof NamedRangeGroupSetting)
@@ -3158,12 +3567,44 @@ public final class DashboardController {
             if (accepted && numericText.length() < 12) numericText += (char) character;
             return true;
         }
-        String text = focusedText();
-        int limit = textFocus == TextInputFocus.SETTING_TEXT && textSetting != null ? textSetting.getMaximumLength()
-                : textFocus == TextInputFocus.MODAL_DESCRIPTION ? 72 : textFocus == TextInputFocus.MODAL_NAME ? 28 : 42;
+        String text = focusedTextSelectedAll ? "" : focusedText();
+        focusedTextSelectedAll = false;
+        int limit = focusedTextLimit();
         if (text.codePointCount(0, text.length()) >= limit) return true;
         setFocusedText(text + Character.toString(character));
         return true;
+    }
+
+    private int focusedTextLimit() {
+        return textFocus == TextInputFocus.SETTING_TEXT && textSetting != null ? textSetting.getMaximumLength()
+                : textFocus == TextInputFocus.MODAL_DESCRIPTION ? 72 : textFocus == TextInputFocus.MODAL_NAME ? 28 : 42;
+    }
+
+    private static String readClipboardText() {
+        try {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client != null && client.getWindow() != null && client.getWindow().getHandle() != 0L) {
+                String clip = GLFW.glfwGetClipboardString(client.getWindow().getHandle());
+                if (clip != null) return clip;
+            }
+            if (client != null && client.keyboard != null) {
+                return client.keyboard.getClipboard();
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
+    }
+
+    private static void writeClipboardText(String value) {
+        try {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client != null && client.getWindow() != null && client.getWindow().getHandle() != 0L) {
+                GLFW.glfwSetClipboardString(client.getWindow().getHandle(), value == null ? "" : value);
+            } else if (client != null && client.keyboard != null) {
+                client.keyboard.setClipboard(value == null ? "" : value);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private boolean processKeyStroke(int key, int scanCode, int modifiers) {
@@ -3184,6 +3625,7 @@ public final class DashboardController {
             if (textFocus != TextInputFocus.NONE) {
                 if (textFocus == TextInputFocus.MODULE_SEARCH) moduleSearch = "";
                 textFocus = TextInputFocus.NONE;
+                focusedTextSelectedAll = false;
                 return true;
             }
             if (page == DashboardPage.EDITOR) changePage(DashboardPage.SCRIPTS);
@@ -3192,14 +3634,83 @@ public final class DashboardController {
         }
         if (textFocus == TextInputFocus.EDITOR) return handleEditorKey(key, modifiers);
         if (textFocus == TextInputFocus.NONE) return false;
+        boolean ctrl = (modifiers & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0;
         String text = focusedText();
+        if (ctrl && key == GLFW.GLFW_KEY_A) {
+            focusedTextSelectedAll = !text.isEmpty();
+            suppressCharacters = true;
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_C) {
+            writeClipboardText(text);
+            suppressCharacters = true;
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_X) {
+            writeClipboardText(text);
+            setFocusedText("");
+            focusedTextSelectedAll = false;
+            suppressCharacters = true;
+            return true;
+        }
+        if (ctrl && key == GLFW.GLFW_KEY_V) {
+            String raw = readClipboardText();
+            if (raw != null && !raw.isEmpty()) {
+                String cleaned = raw.replace("\r", "").replace("\n", "").replace("\t", " ").trim();
+                if (textFocus == TextInputFocus.SETTING_TEXT && textSetting == ClickGui.backgroundMediaPath
+                        && cleaned.length() >= 2
+                        && ((cleaned.startsWith("\"") && cleaned.endsWith("\""))
+                        || (cleaned.startsWith("'") && cleaned.endsWith("'")))) {
+                    cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
+                }
+                if (textFocus == TextInputFocus.SETTING_NUMBER) {
+                    String base = focusedTextSelectedAll ? "" : text;
+                    StringBuilder num = new StringBuilder(base);
+                    for (int i = 0; i < cleaned.length() && num.length() < 12; i++) {
+                        char ch = cleaned.charAt(i);
+                        boolean ok = (ch >= '0' && ch <= '9')
+                                || (ch == '.' && num.indexOf(".") < 0
+                                && (numericSetting instanceof FloatSetting || numericSetting instanceof FloatRangeSetting || numericSetting instanceof NamedRangeGroupSetting))
+                                || (ch == '-' && num.isEmpty());
+                        if (ok) num.append(ch);
+                    }
+                    numericText = num.toString();
+                } else {
+                    boolean replaceAll = focusedTextSelectedAll
+                            || (textFocus == TextInputFocus.SETTING_TEXT && textSetting == ClickGui.backgroundMediaPath
+                            && (cleaned.contains(":\\") || cleaned.contains(":/") || cleaned.startsWith("/") || cleaned.startsWith("\\\\")));
+                    String combined = (replaceAll ? "" : text) + cleaned;
+                    int limit = focusedTextLimit();
+                    if (combined.codePointCount(0, combined.length()) > limit) {
+                        combined = combined.substring(0, combined.offsetByCodePoints(0, limit));
+                    }
+                    setFocusedText(combined);
+                }
+                focusedTextSelectedAll = false;
+            }
+            suppressCharacters = true;
+            return true;
+        }
+        if (key == InputKey.DELETE.code()) {
+            if (focusedTextSelectedAll) {
+                setFocusedText("");
+                focusedTextSelectedAll = false;
+                return true;
+            }
+            return false;
+        }
         if (key == InputKey.BACKSPACE.code() && !text.isEmpty()) {
-            boolean word = (modifiers & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0;
-            int end = word ? previousInputWord(text) : text.offsetByCodePoints(text.length(), -1);
+            if (focusedTextSelectedAll) {
+                setFocusedText("");
+                focusedTextSelectedAll = false;
+                return true;
+            }
+            int end = ctrl ? previousInputWord(text) : text.offsetByCodePoints(text.length(), -1);
             setFocusedText(text.substring(0, end));
             return true;
         }
         if (key != InputKey.ENTER.code() && key != InputKey.KEYPAD_ENTER.code()) return false;
+        focusedTextSelectedAll = false;
         if (modalOpen) commitConfigModal();
         else if (textFocus == TextInputFocus.FRIEND_NAME) addFriend();
         else if (textFocus == TextInputFocus.SETTING_NUMBER) commitNumericInput();
@@ -3593,10 +4104,31 @@ public final class DashboardController {
                     textFocus = TextInputFocus.NONE;
                 }
             } else if (setting instanceof TextSetting text) {
-                if (ui.interact(id, new UiRect(x, y + 30.0f, 476.0f, 32.0f)).clicked()) {
+                boolean isMediaPath = text == ClickGui.backgroundMediaPath;
+                float boxWidth = isMediaPath ? 328.0f : 476.0f;
+                if (isMediaPath) {
+                    if (ui.interact(CLICKGUI_BROWSE_MEDIA_INPUT_ID, new UiRect(x + 334.0f, y + 30.0f, 82.0f, 32.0f)).clicked()) {
+                        backgroundMedia.openFilePickerAsync();
+                        textFocus = TextInputFocus.NONE;
+                        focusedTextSelectedAll = false;
+                        continue;
+                    }
+                    if (ClickGui.hasBackgroundMedia()
+                            && ui.interact(CLICKGUI_CLEAR_MEDIA_INPUT_ID, new UiRect(x + 422.0f, y + 30.0f, 54.0f, 32.0f)).clicked()) {
+                        ClickGui.backgroundMediaPath.setText("");
+                        if (textSetting == ClickGui.backgroundMediaPath) {
+                            settingText = "";
+                            textFocus = TextInputFocus.NONE;
+                            focusedTextSelectedAll = false;
+                        }
+                        continue;
+                    }
+                }
+                if (ui.interact(id, new UiRect(x, y + 30.0f, boxWidth, 32.0f)).clicked()) {
                     textFocus = TextInputFocus.SETTING_TEXT;
                     textSetting = text;
                     settingText = text.getText();
+                    focusedTextSelectedAll = false;
                 }
             } else if (setting instanceof HotbarSlotsSetting slots) {
                 for (int slot = 0; slot < 9; slot++) {
@@ -4266,12 +4798,30 @@ public final class DashboardController {
         if (ui.interact(CONFIGS_IMPORT_INPUT_ID, new UiRect(690.0f, 112.0f, 114.0f, 37.0f)).clicked()) {
             importConfigFromClipboard();
         }
-        if (browsePublicConfigs && !autoConfigTabActive
-                && ui.interact(CONFIGS_CLOUD_REFRESH_INPUT_ID, new UiRect(816.0f, 112.0f, 92.0f, 37.0f)).clicked()) {
-            CloudConfigCatalog.refreshAsync(this::requestRefresh);
+        if (browsePublicConfigs && !autoConfigTabActive) {
+            if (ui.interact(CONFIGS_CLOUD_ALL_INPUT_ID, new UiRect(1460.0f, 115.0f, 50.0f, 31.0f)).clicked()) {
+                cloudTypeFilter = 0;
+                configScroll = 0.0f;
+            }
+            if (ui.interact(CONFIGS_CLOUD_GHOST_INPUT_ID, new UiRect(1514.0f, 115.0f, 64.0f, 31.0f)).clicked()) {
+                cloudTypeFilter = 1;
+                configScroll = 0.0f;
+            }
+            if (ui.interact(CONFIGS_CLOUD_RAGE_INPUT_ID, new UiRect(1582.0f, 115.0f, 58.0f, 31.0f)).clicked()) {
+                cloudTypeFilter = 2;
+                configScroll = 0.0f;
+            }
+            if (ui.interact(CONFIGS_CLOUD_KEEP_BINDS_INPUT_ID, new UiRect(1662.0f, 112.0f, 134.0f, 37.0f)).clicked()) {
+                boolean current = com.blamejared.clumps.client.config.ModuleConfig.isPreserveBindsOnCloudLoad();
+                com.blamejared.clumps.client.config.ModuleConfig.setPreserveBindsOnCloudLoad(!current);
+            }
+            if (ui.interact(CONFIGS_CLOUD_REFRESH_INPUT_ID, new UiRect(1808.0f, 112.0f, 58.0f, 37.0f)).clicked()) {
+                CloudConfigCatalog.refreshAsync(this::requestRefresh);
+            }
         }
         if (ui.interact(CONFIG_SEARCH_INPUT_ID, new UiRect(1606.0f, 58.0f, 260.0f, 34.0f)).clicked()) {
             textFocus = TextInputFocus.CONFIG_SEARCH;
+            focusedTextSelectedAll = false;
         }
         if (autoConfigTabActive) {
             autoConfigView.handleInput(ui, mouseX, mouseY, this::openAutoConfigItemPicker);
@@ -4282,7 +4832,12 @@ public final class DashboardController {
             configScroll = 0.0f;
         }
         List<ConfigCard> cards = filteredConfigs();
-        UiRect viewport = new UiRect(330.0f, 157.0f, 1560.0f, 885.0f);
+        if (browsePublicConfigs) {
+            handleCloudSplitInput(cards);
+            return;
+        }
+        float listTop = 157.0f;
+        UiRect viewport = new UiRect(330.0f, listTop, 1560.0f, 1042.0f - listTop);
         if (viewport.contains(mouseX, mouseY) && Math.abs(ui.input().verticalScroll()) > 0.0) {
             float maximum = maximumConfigScroll(cards.size());
             configScroll = Math.max(0.0f, Math.min(maximum, configScroll - (float) ui.input().verticalScroll() * 60.0f));
@@ -4325,6 +4880,79 @@ public final class DashboardController {
         }
         ui.popClip();
         if (!overConfirmation && ui.input().wasPressed(InputKey.MOUSE_LEFT.code())) pendingConfirmationId = null;
+    }
+
+    private void handleCloudSplitInput(List<ConfigCard> cards) {
+        UiRect listViewport = new UiRect(354.0f, 168.0f, 972.0f, 862.0f);
+        if (listViewport.contains(mouseX, mouseY) && Math.abs(ui.input().verticalScroll()) > 0.0) {
+            float maximum = maximumConfigScroll(cards.size());
+            configScroll = Math.max(0.0f, Math.min(maximum, configScroll - (float) ui.input().verticalScroll() * 60.0f));
+        }
+        ConfigCard inspected = resolveSelectedCloudCard(cards);
+        ui.pushClip(listViewport);
+        for (int index = 0; index < cards.size(); index++) {
+            float y = 168.0f + index * 106.0f - configScroll;
+            if (y + 92.0f < 160.0f || y > 1038.0f) continue;
+            ConfigCard card = cards.get(index);
+            if (ui.interact("cloud/row/" + card.id, new UiRect(354.0f, y, 972.0f, 92.0f)).clicked()) {
+                selectedCloudPresetId = card.id;
+                inspected = card;
+            }
+        }
+        ui.popClip();
+
+        if (inspected == null) return;
+        float inspX = 1350.0f;
+        float inspY = 168.0f;
+        float ix = inspX + 28.0f;
+        float iw = 516.0f - 56.0f;
+        if (ui.interact("cloud/insp/binds", new UiRect(ix, inspY + 354.0f, iw, 38.0f)).clicked()) {
+            boolean current = com.blamejared.clumps.client.config.ModuleConfig.isPreserveBindsOnCloudLoad();
+            com.blamejared.clumps.client.config.ModuleConfig.setPreserveBindsOnCloudLoad(!current);
+            return;
+        }
+        float btnY = inspY + 412.0f;
+        float btnW = (iw - 12.0f) * 0.5f;
+        if (ui.interact("cloud/insp/load", new UiRect(ix, btnY, btnW, 46.0f)).clicked()) {
+            loadConfig(inspected.id, inspected.name);
+            showConfigStatus(inspected.id, "Loaded!");
+            return;
+        }
+        float saveX = ix + btnW + 12.0f;
+        if (ui.interact("cloud/insp/save", new UiRect(saveX, btnY, btnW, 46.0f)).clicked()) {
+            if (ClumpsClient.ModuleConfig != null && ClumpsClient.ModuleConfig.saveCloudCopyOnly(inspected.id) != null) {
+                showConfigStatus(inspected.id, "Saved Copy!");
+                requestRefresh();
+            }
+            return;
+        }
+        float codeY = btnY + 58.0f;
+        if (ui.interact("cloud/insp/code", new UiRect(ix, codeY, iw, 36.0f)).clicked()) {
+            copyConfigShareCode(inspected);
+        }
+    }
+
+    public void disposeResources() {
+        backgroundMedia.dispose();
+        if (ClumpsClient.renderDevice != null) {
+            for (TextureView icon : serverIcons.values()) {
+                if (icon != null && icon.texture != null) {
+                    try {
+                        ClumpsClient.renderDevice.release(icon.texture);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+        serverIcons.clear();
+        if (svgTextures != null) {
+            try {
+                svgTextures.close();
+            } catch (Throwable ignored) {
+            }
+            svgTextures = null;
+        }
+        configCards.clear();
     }
 
     private void handleModuleInput() {

@@ -26,6 +26,7 @@ import java.util.regex.Pattern;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.file.RegularFileProperty;
@@ -129,6 +130,13 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
         // Stage 3c: Ensure minimal backward-compatible ClumpsClient.class (> 100 bytes) exists for V3.5/V3.6 AutoUpdaters
         injectCompatMarkerClass(entries);
 
+        // Stage 4: Full Automated Bytecode + Mixin + Zero-Leak + Opaque-Structure Verification Gate
+        verifyJar(entries, renamedMcMixinClass);
+
+        // Stage 4b: Inline nested JiJ libraries (jsvg/rhino) directly into the mod JAR and strip
+        // fabric.mod.json "jars" so Fabric Loader does not print nested library mod IDs in latest.log.
+        int inlinedLibEntries = inlineNestedLibraries(entries);
+
         // Write atomically to temp jar then move to final output jar
         Path tempOut = outJar.toPath().resolveSibling(outJar.getName() + ".hardened.tmp");
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempOut))) {
@@ -142,12 +150,58 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
         }
         Files.move(tempOut, outJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-        // Stage 4: Full Automated Bytecode + Mixin + Zero-Leak + Opaque-Structure Verification Gate
-        verifyJar(entries, renamedMcMixinClass);
-
         getLogger().lifecycle(
-                "Stages 2-4 complete on {}: {} classes hardened, {} strings encrypted, {} numeric constants obfuscated, {} opaque guards, {} assets vaulted, {} mixins obfuscated.",
-                outJar.getName(), transformedClasses, encryptedStrings, obfuscatedConstants, opaqueGuards, vaultedAssets, mixinRenames.size());
+                "Stages 2-4 complete on {}: {} classes hardened, {} strings encrypted, {} numeric constants obfuscated, {} opaque guards, {} assets vaulted, {} mixins obfuscated, {} bundled lib entries inlined.",
+                outJar.getName(), transformedClasses, encryptedStrings, obfuscatedConstants, opaqueGuards, vaultedAssets, mixinRenames.size(), inlinedLibEntries);
+    }
+
+    private static int inlineNestedLibraries(Map<String, byte[]> entries) throws IOException {
+        List<String> nestedJars = entries.keySet().stream()
+                .filter(k -> k.startsWith("META-INF/jars/") && k.endsWith(".jar"))
+                .toList();
+        if (nestedJars.isEmpty()) {
+            return 0;
+        }
+        int copied = 0;
+        for (String jarKey : nestedJars) {
+            byte[] jarBytes = entries.remove(jarKey);
+            if (jarBytes == null) continue;
+            try (ZipInputStream zis = new ZipInputStream(new java.io.ByteArrayInputStream(jarBytes))) {
+                ZipEntry inner;
+                while ((inner = zis.getNextEntry()) != null) {
+                    if (inner.isDirectory()) continue;
+                    String name = inner.getName();
+                    if (name.equals("META-INF/MANIFEST.MF")
+                            || name.equals("fabric.mod.json")
+                            || name.endsWith("module-info.class")
+                            || name.startsWith("META-INF/versions/")
+                            || name.startsWith("META-INF/maven/")
+                            || name.startsWith("META-INF/LICENSE")
+                            || name.startsWith("META-INF/NOTICE")
+                            || name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA")
+                            || name.endsWith(".html")) {
+                        continue;
+                    }
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = zis.read(buf)) != -1) {
+                        bos.write(buf, 0, r);
+                    }
+                    if (!entries.containsKey(name)) {
+                        entries.put(name, bos.toByteArray());
+                        copied++;
+                    }
+                }
+            }
+        }
+        byte[] fmjRaw = entries.get("fabric.mod.json");
+        if (fmjRaw != null) {
+            String fmj = new String(fmjRaw, StandardCharsets.UTF_8);
+            fmj = fmj.replaceAll(",\\s*\"jars\"\\s*:\\s*\\[[^\\]]*\\]", "");
+            entries.put("fabric.mod.json", fmj.getBytes(StandardCharsets.UTF_8));
+        }
+        return copied;
     }
 
     private int packAssetVault(Map<String, byte[]> entries) throws IOException {
@@ -360,7 +414,8 @@ public abstract class HardenAndVerifyJarTask extends DefaultTask {
                 Pattern.compile("DEV FLIGHT RECORDER", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("bug-dump-", Pattern.CASE_INSENSITIVE),
                 Pattern.compile("MODULE_CRASH"),
-                Pattern.compile("SLOW_HANDLER")
+                Pattern.compile("SLOW_HANDLER"),
+                Pattern.compile("skidfuscator", Pattern.CASE_INSENSITIVE)
         );
         List<String> forbiddenPlaintextFeatures = List.of(
                 "Trigger Bot", "Shield Breaker", "Auto Mace Swap", "Auto Web", "Cart Refill", "Base Finder", "Breach Swap"

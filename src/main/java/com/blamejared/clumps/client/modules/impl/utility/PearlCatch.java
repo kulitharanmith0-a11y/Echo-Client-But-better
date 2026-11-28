@@ -166,7 +166,7 @@ public class PearlCatch extends Module {
         instantPhaseTick = -1;
         legitSequenceActive = false;
         legitConsumedUntilRelease = false;
-        silentAim.setVisibilityPredicate(ignored -> autoAim.getValue());
+        silentAim.setVisibilityPredicate(ignored -> autoAim.getValue() && !legitMode.getValue());
         retry.setVisibilityPredicate(ignored -> autoAim.getValue());
         highDelay.tooltip(HIGH_DELAY_TOOLTIP);
         legitDelay.setVisibilityPredicate(ignored -> legitMode.getValue());
@@ -330,7 +330,7 @@ public class PearlCatch extends Module {
     }
 
     private boolean usesSilentAim() {
-        return !legitSequenceActive && silentAim.getValue();
+        return !legitSequenceActive && !legitMode.getValue() && silentAim.getValue();
     }
 
     private boolean usesVisibleAim() { return usesAutoAim() && !usesSilentAim(); }
@@ -467,7 +467,12 @@ public class PearlCatch extends Module {
             py += vy;
             pz += vz;
             if (!capturedOnGround) {
+                vx *= 0.91;
                 vy = (vy - 0.08) * 0.98;
+                vz *= 0.91;
+            } else {
+                vx *= 0.546;
+                vz *= 0.546;
             }
         }
         Vec3d projectedEye = new Vec3d(px, py, pz);
@@ -505,14 +510,13 @@ public class PearlCatch extends Module {
         return null;
     }
 
-    private void useWithPlan(LaunchCandidate plan) {
+    private boolean useWithPlan(LaunchCandidate plan) {
         if (!usesSilentAim()) {
-            useIgnoringCrosshair();
-            return;
+            return useIgnoringCrosshair();
         }
         rotations().override(this, RotationPriority.HIGH, new Rotation(plan.yaw(), plan.pitch()))
                 .ifPresent(RotationScope::commit);
-        useIgnoringCrosshair();
+        return useIgnoringCrosshair();
     }
 
     private void handleWait() {
@@ -578,7 +582,8 @@ public class PearlCatch extends Module {
         Vec3d position = pearlSpawnPosition;
         Vec3d velocity = pearlSpawnVelocity;
         if (trajectory == null || trajectory.exactVelocity() || position == null || velocity == null) return;
-        if (position.distanceTo(trajectory.position()) > SPAWN_MATCH_DISTANCE) return;
+        double dynamicMatchDist = Math.max(SPAWN_MATCH_DISTANCE, sequenceVelocity().length() * 6.0 + 6.0);
+        if (position.distanceTo(trajectory.position()) > dynamicMatchDist) return;
         trajectory = new ProjectileState(position, velocity, true);
         pearlFlightTicks = LaunchTrajectorySearch.flightTicks(trajectory);
     }
@@ -595,8 +600,15 @@ public class PearlCatch extends Module {
         windChargeSpawnPosition = null;
         windChargeSpawnVelocity = null;
         awaitingWindChargeSpawn = plan != null;
-        if (plan != null) useWithPlan(plan);
-        else actions().executeDoItemUse(this);
+        boolean thrown = plan != null ? useWithPlan(plan) : useIgnoringCrosshair();
+        if (!thrown && !client.player.getItemCooldownManager().isCoolingDown(new ItemStack(Items.WIND_CHARGE))) {
+            awaitingWindChargeSpawn = false;
+            if (client.player.age - scheduledCatchTick >= AIM_WAIT_TICKS
+                    || client.player.age - pearlThrowTick >= pearlFlightTicks) {
+                resetNormalSequence(true);
+            }
+            return;
+        }
         activePlan = null;
         if (plan != null) {
             thrownPlan = plan;
@@ -610,12 +622,15 @@ public class PearlCatch extends Module {
         } else resetNormalSequence(false);
     }
 
-    private void useIgnoringCrosshair() {
+    private boolean useIgnoringCrosshair() {
         HitResult previousHit = client.crosshairTarget;
         Vec3d eye = client.player.getEyePos();
         client.crosshairTarget = BlockHitResult.createMissed(eye, Direction.UP, client.player.getBlockPos());
-        actions().executeDoItemUse(this);
-        client.crosshairTarget = previousHit;
+        try {
+            return actions().executeDoItemUse(this).succeeded();
+        } finally {
+            client.crosshairTarget = previousHit;
+        }
     }
 
     private void handleSwitchBack() {
@@ -635,7 +650,14 @@ public class PearlCatch extends Module {
     }
 
     private Vec3d sequenceVelocity() {
-        return PearlCatchCalculations.restoredVelocity(capturedVelocity, capturedOnGround);
+        Vec3d vel = capturedVelocity;
+        if (client.player != null) {
+            Vec3d live = client.player.getVelocity();
+            if (vel == null || (vel.lengthSquared() < 1.0E-4 && live.lengthSquared() > 0.04)) {
+                vel = live;
+            }
+        }
+        return PearlCatchCalculations.restoredVelocity(vel, capturedOnGround);
     }
 
     private void resetNormalSequence(boolean restore) {
@@ -731,8 +753,7 @@ public class PearlCatch extends Module {
         Vec3d eye = new Vec3d(origin.x, origin.y + eyeHeight, origin.z);
         double hitFraction = LaunchTrajectorySearch.hitFraction(launched, eye, velocity, 0, rotation.yaw(), rotation.pitch(), flightTicks - 1);
         if (!autoAim.getValue() || hitFraction >= REQUIRED_HIT_FRACTION) {
-            actions().executeDoItemUse(this);
-            actions().executeDoItemUse(this);
+            useIgnoringCrosshair();
             usePendingOffhand();
             beginInstantRestoration();
             return;

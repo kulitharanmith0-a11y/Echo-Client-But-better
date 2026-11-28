@@ -15,6 +15,10 @@ import com.blamejared.clumps.client.modules.ModuleInfo;
 import com.blamejared.clumps.client.modules.internals.Targets;
 import com.blamejared.clumps.client.handlers.AttackCooldownTracker;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
+import com.blamejared.clumps.client.handlers.rotation.AimTransition;
+import com.blamejared.clumps.client.handlers.rotation.RotationPriority;
+import com.blamejared.clumps.client.handlers.rotation.RotationSettings;
+import com.blamejared.clumps.client.handlers.rotation.RotationVisibility;
 import com.blamejared.clumps.client.keyboard.KeybindingCache;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.settings.BooleanSetting;
@@ -27,10 +31,18 @@ import com.blamejared.clumps.client.utils.CooldownTimer;
 import com.blamejared.clumps.client.utils.MathRng;
 import com.blamejared.clumps.client.utils.interaction.EntityInteractions;
 import com.blamejared.clumps.client.utils.items.InventoryItems;
+import com.blamejared.clumps.client.utils.placement.BlockPlacement;
+import com.blamejared.clumps.client.utils.placement.PlacementTarget;
 import com.blamejared.clumps.client.utils.targeting.EntityPredicates;
 import com.blamejared.clumps.client.utils.targeting.TargetSelection;
+import net.minecraft.block.Blocks;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.Items;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 
 public class ShieldBreaker extends Module {
     private static final CharSequence modeOption = literal("Click");
@@ -50,9 +62,12 @@ public class ShieldBreaker extends Module {
     public static BooleanSetting unblockOwnShield;
     public static BooleanSetting stun;
     public static IntSetting stunChance;
+    public static final BooleanSetting stunWeb = new BooleanSetting(literal("Stun Web"), false);
+    public static final IntSetting stunWebDelay = new IntSetting(literal("Stun Web Delay"), 1, 0, 6, literal(" ticks"));
     public static ItemListSetting itemWhitelist;
     public static HotbarSlotsSetting hotbarWhitelist;
-    private static final long STUN_FOLLOWUP_WINDOW_TICKS = 8L;
+    private static final long STUN_FOLLOWUP_WINDOW_TICKS = 14L;
+    private static final long STUN_WEB_WINDOW_TICKS = 12L;
     private static volatile ShieldBreaker activeInstance;
     private CooldownTimer attackTimer;
     private CooldownTimer switchTimer;
@@ -60,11 +75,17 @@ public class ShieldBreaker extends Module {
     private int preSwapSlot = -1;
     private int pendingReturnSlot = -1;
     private int pendingReturnRetries;
+    private int lastScheduledSwapTicks;
     private PlayerEntity shieldTarget;
     private int stunFollowupTargetId = -1;
     private long stunReadyAtTick;
     private long stunExpiresAtTick;
     private boolean stunWaitingForSwapBack;
+    private int pendingWebTargetId = -1;
+    private long webReadyAtTick;
+    private long webExpiresAtTick;
+    private int webReturnSlot = -1;
+    private boolean webReturnPending;
     private PlayerEntity timedAttackTarget;
     private boolean attackDelayActive;
     private boolean switchDelayActive;
@@ -103,6 +124,11 @@ public class ShieldBreaker extends Module {
         stunChance.setVisibilityPredicate(ignored -> stun.getValue());
         stunChance.description(literal("Percentage chance to follow up with a stun hit after breaking a shield"));
         stunChance.tooltip("Timing");
+        stunWeb.tooltip("Stun Web");
+        stunWeb.description(literal("Automatically places a cobweb at the enemy's feet right after stunning their shield"));
+        stunWebDelay.tooltip("Stun Web");
+        stunWebDelay.setVisibilityPredicate(ignored -> stunWeb.getValue());
+        stunWebDelay.description(literal("Ticks to wait after the shield break or stun hit before placing the cobweb"));
         if (reactionSection == null) reactionSection = "Timing";
         reactionDelay.tooltip(reactionSection);
         if (attackSection == null) attackSection = "Timing";
@@ -139,7 +165,22 @@ public class ShieldBreaker extends Module {
 
     @Subscribe(priority = EventPriority.HIGH)
     private void onHandleInputPre(HandleInputEvent.Pre event) {
-        if (pendingReturnSlot == -1 || isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+        if (isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+            return;
+        }
+        if (webReturnPending) {
+            int slot = webReturnSlot;
+            webReturnPending = false;
+            webReturnSlot = -1;
+            if (slot >= 0 && slot <= 8 && client.player.getInventory().getSelectedSlot() != slot) {
+                actions().executeSlotSelect(this, slot, true);
+            }
+            rotations().beginReturn(this);
+        }
+        if (pendingWebTargetId != -1) {
+            processPendingStunWeb();
+        }
+        if (pendingReturnSlot == -1) {
             return;
         }
         int targetSlot = pendingReturnSlot;
@@ -168,6 +209,7 @@ public class ShieldBreaker extends Module {
         if (event.slot != selectedAxeSlot) return;
         selectedAxeSlot = -1;
         int ticks = Math.max(0, Math.round(swapBackDelay.sampleGaussian()));
+        lastScheduledSwapTicks = ticks;
         boolean restoreAll = swapBack.getValue() && returnTo.isSelected(returnToOption);
         if (!DeferredActionQueue.contains(this) && client.player != null) {
             preSwapSlot = client.player.getInventory().getSelectedSlot();
@@ -175,6 +217,7 @@ public class ShieldBreaker extends Module {
         if (!DeferredActionQueue.select(this, event.slot, ticks, restoreAll, this::onSwapEnded)) {
             shieldTarget = null;
             preSwapSlot = -1;
+            lastScheduledSwapTicks = 0;
             return;
         }
         event.addClick();
@@ -227,15 +270,19 @@ public class ShieldBreaker extends Module {
                 Targets.shieldBreakActive = true;
                 return;
             }
-            if (client.crosshairTarget instanceof EntityHitResult hit
-                    && hit.getEntity() instanceof PlayerEntity target
-                    && target.getId() == stunFollowupTargetId
-                    && target.isAlive() && !target.isRemoved()) {
-                if (event.hasClicks() || actions().requestAttackClick(this, event)) {
+            PlayerEntity target = resolveStunFollowupTarget();
+            if (target != null) {
+                boolean fired = event.hasClicks()
+                        || actions().requestAttackClick(this, event)
+                        || actions().executeEntityAttack(this, target, true).succeeded();
+                if (fired) {
                     if (com.blamejared.clumps.client.diagnostics.DevDiagnostics.ENABLED) {
                         com.blamejared.clumps.client.diagnostics.DevDiagnostics.metric("ShieldBreaker.Stun.Fired");
                         com.blamejared.clumps.client.diagnostics.DevDiagnostics.log("ShieldBreaker", "STUN_FIRED",
                                 "target=" + target.getName().getString() + " slot=" + client.player.getInventory().getSelectedSlot());
+                    }
+                    if (stunWeb.getValue()) {
+                        scheduleStunWeb(target);
                     }
                     clearStunFollowup();
                     Targets.shieldBreakActive = false;
@@ -290,10 +337,12 @@ public class ShieldBreaker extends Module {
         int slot = findAxeSlot();
         if (slot == -1 || DeferredActionQueue.contains(this)) return;
         int ticks = Math.max(0, Math.round(swapBackDelay.sampleGaussian()));
+        lastScheduledSwapTicks = ticks;
         boolean restoreAll = swapBack.getValue() && returnTo.isSelected(returnToOption);
         preSwapSlot = client.player.getInventory().getSelectedSlot();
         if (!DeferredActionQueue.select(this, slot, ticks, restoreAll, this::onSwapEnded)) {
             preSwapSlot = -1;
+            lastScheduledSwapTicks = 0;
             return;
         }
         actions().adoptSyntheticAttackOwner(this);
@@ -301,7 +350,7 @@ public class ShieldBreaker extends Module {
     }
 
     private void handleNormalAttack(AttackKeyEvent event) {
-        if (AutoMaceSwap.isStunSequenceRunning()) return;
+        if (AutoMaceSwap.isStunSequenceRunning() || isAscendingJump()) return;
         if (!passesItemConditions()) return;
         if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) return;
         PlayerEntity target = findShieldTarget();
@@ -314,7 +363,7 @@ public class ShieldBreaker extends Module {
     }
 
     private void prepareAxeSwap() {
-        if (!mode.isSelected(modeOption2) || isOutsideWorld()) return;
+        if (!mode.isSelected(modeOption2) || isOutsideWorld() || isAscendingJump()) return;
         if (MinecraftRenderState.getScreen() != null || !passesItemConditions()) return;
         if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) return;
         PlayerEntity target = findShieldTarget();
@@ -345,15 +394,107 @@ public class ShieldBreaker extends Module {
                     "mode=" + mode.getValue() + " target=" + target.getName().getString()
                             + " swapBack=" + swapBack.getValue() + " stun=" + stun.getValue());
         }
+        boolean scheduledStun = false;
         if (stun.getValue() && passesStunChance() && client.player != null) {
+            int swapWait = swapBack.getValue() && DeferredActionQueue.contains(this) ? Math.max(0, lastScheduledSwapTicks) : 0;
             stunFollowupTargetId = target.getId();
             stunReadyAtTick = client.player.age + 1L;
-            stunExpiresAtTick = client.player.age + STUN_FOLLOWUP_WINDOW_TICKS;
+            stunExpiresAtTick = client.player.age + swapWait + STUN_FOLLOWUP_WINDOW_TICKS;
             stunWaitingForSwapBack = swapBack.getValue() && DeferredActionQueue.contains(this);
             Targets.shieldBreakActive = true;
+            scheduledStun = true;
+        }
+        if (stunWeb.getValue() && !scheduledStun) {
+            scheduleStunWeb(target);
         }
         attackDelayActive = true;
         switchTimer.reset();
+    }
+
+    private boolean isAscendingJump() {
+        return client.player != null && !client.player.isOnGround() && client.player.getVelocity().y > 0.0;
+    }
+
+    private PlayerEntity resolveStunFollowupTarget() {
+        if (client.crosshairTarget instanceof EntityHitResult hit
+                && hit.getEntity() instanceof PlayerEntity target
+                && target.getId() == stunFollowupTargetId
+                && target.isAlive() && !target.isRemoved()) {
+            return target;
+        }
+        if (client.world != null && client.player != null
+                && client.world.getEntityById(stunFollowupTargetId) instanceof PlayerEntity tracked
+                && tracked.isAlive() && !tracked.isRemoved()) {
+            double reach = Math.max(3.0, client.player.getEntityInteractionRange());
+            Vec3d eye = client.player.getCameraPosVec(1.0F);
+            if (tracked.getBoundingBox().squaredMagnitude(eye) <= reach * reach) {
+                Vec3d look = client.player.getRotationVec(1.0F);
+                Vec3d toTarget = tracked.getBoundingBox().getCenter().subtract(eye).normalize();
+                if (look.dotProduct(toTarget) >= 0.85) {
+                    return tracked;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void scheduleStunWeb(PlayerEntity target) {
+        if (client.player == null || target == null) return;
+        pendingWebTargetId = target.getId();
+        webReadyAtTick = client.player.age + Math.max(0, stunWebDelay.getValue());
+        webExpiresAtTick = webReadyAtTick + STUN_WEB_WINDOW_TICKS;
+    }
+
+    private void processPendingStunWeb() {
+        if (client.player == null || client.world == null || client.player.age > webExpiresAtTick) {
+            pendingWebTargetId = -1;
+            return;
+        }
+        if (client.player.age < webReadyAtTick || stunFollowupTargetId != -1) {
+            return;
+        }
+        if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) {
+            return;
+        }
+        if (!(client.world.getEntityById(pendingWebTargetId) instanceof PlayerEntity target)
+                || !target.isAlive() || target.isRemoved()) {
+            pendingWebTargetId = -1;
+            return;
+        }
+        int webSlot = InventoryItems.findStackInHotbar(stack -> stack.isOf(Items.COBWEB));
+        if (webSlot == -1) {
+            pendingWebTargetId = -1;
+            return;
+        }
+        BlockPos feet = target.getBlockPos();
+        if (client.world.getBlockState(feet).isOf(Blocks.COBWEB)) {
+            pendingWebTargetId = -1;
+            return;
+        }
+        PlacementTarget placement = BlockPlacement.find(feet, true);
+        if (placement == null) {
+            return;
+        }
+        Vec3d eye = client.player.getCameraPosVec(1.0F);
+        double reachSq = MathHelper.square(client.player.getBlockInteractionRange());
+        if (eye.squaredDistanceTo(placement.hitResult().getPos()) > reachSq) {
+            return;
+        }
+        int previousSlot = client.player.getInventory().getSelectedSlot();
+        if (previousSlot != webSlot && !actions().executeSlotSelect(this, webSlot, true).succeeded()) {
+            return;
+        }
+        rotations().aim(this, RotationPriority.HIGH, placement.hitResult().getPos(),
+                RotationSettings.uniform(RotationVisibility.SILENT, AimTransition.SNAP, 360.0F));
+        if (actions().executeBlockUse(this, Hand.MAIN_HAND, placement.hitResult(), true).succeeded()) {
+            pendingWebTargetId = -1;
+            if (previousSlot != webSlot) {
+                webReturnSlot = previousSlot;
+                webReturnPending = true;
+            } else {
+                rotations().beginReturn(this);
+            }
+        }
     }
 
     private void clearStunFollowup() {
@@ -388,7 +529,7 @@ public class ShieldBreaker extends Module {
     }
 
     private void releaseOwnShield() {
-        if (!mode.isSelected(modeOption2) || !unblockOwnShield.getValue() || ownShieldReleased) return;
+        if (!mode.isSelected(modeOption2) || !unblockOwnShield.getValue() || ownShieldReleased || isAscendingJump()) return;
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || !passesItemConditions()) return;
         if (DeferredActionQueue.hasPendingActions() && !DeferredActionQueue.contains(this)) return;
         PlayerEntity target = findShieldTarget();
@@ -439,6 +580,12 @@ public class ShieldBreaker extends Module {
         preSwapSlot = -1;
         pendingReturnSlot = -1;
         pendingReturnRetries = 0;
+        lastScheduledSwapTicks = 0;
+        pendingWebTargetId = -1;
+        webReadyAtTick = 0L;
+        webExpiresAtTick = 0L;
+        webReturnSlot = -1;
+        webReturnPending = false;
         initializePlayerEntityClass();
         shieldTarget = null;
         clearStunFollowup();
@@ -468,6 +615,8 @@ public class ShieldBreaker extends Module {
         CatalogSettings.append(Module, unblockOwnShield);
         CatalogSettings.append(Module, stun);
         CatalogSettings.append(Module, stunChance);
+        CatalogSettings.append(Module, stunWeb);
+        CatalogSettings.append(Module, stunWebDelay);
         CatalogSettings.append(Module, itemWhitelist);
         CatalogSettings.append(Module, hotbarWhitelist);
     }

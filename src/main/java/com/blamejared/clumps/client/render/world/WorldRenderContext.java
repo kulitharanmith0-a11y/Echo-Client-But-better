@@ -73,6 +73,7 @@ public final class WorldRenderContext {
     private Texture worldColorTexture;
     private GpuTextureView minecraftColorSource;
     private TextureView minecraftColorView;
+    private boolean drewWorldOverlaysThisFrame;
 
     public WorldRenderContext(RenderDevice device) {
         this.device = device;
@@ -117,6 +118,7 @@ public final class WorldRenderContext {
 
     
     public void beginFrame() {
+        drewWorldOverlaysThisFrame = false;
         Framebuffer framebuffer = MinecraftRenderState.getFramebuffer(MinecraftClient.getInstance());
         if (worldColorTexture.width != framebuffer.textureWidth
                 || worldColorTexture.height != framebuffer.textureHeight) {
@@ -152,6 +154,11 @@ public final class WorldRenderContext {
     public void clearExternalOverlays() {
         externalOverlays.clear();
         externalOverlayComposite.reset();
+        drewWorldOverlaysThisFrame = false;
+    }
+
+    public boolean hasWorldOverlayContent() {
+        return drewWorldOverlaysThisFrame || !externalOverlays.isEmpty();
     }
 
     public void compositeExternalOverlays(CommandEncoder commands, TextureView target, OptionalInt clearColor) {
@@ -191,6 +198,8 @@ public final class WorldRenderContext {
 
     
     public void flush() {
+        boolean hasGeometry = depthTestedGeometry.hasGeometry() || overlayGeometry.hasGeometry();
+        drewWorldOverlaysThisFrame = hasGeometry;
         depthTestedGeometry.renderTo(worldColorTexture.views[0]);
         overlayGeometry.renderTo(worldColorTexture.views[0]);
         CommandEncoder commands = ClumpsClient.commandEncoder;
@@ -199,10 +208,24 @@ public final class WorldRenderContext {
         }
         commands.transitionTexture(worldColorTexture.views[0], 2, TextureAccess.SAMPLED, TextureLayout.SHADER_READ_ONLY);
         worldComposite.draw(worldColorTexture.views[0], 0.0F, 0.0F, GuiDimensions.width(), GuiDimensions.height(), 0.0F, 1.0F, 0.0F);
-        if (ClumpsClient.externalRendererActive) {
+        if (ClumpsClient.externalRendererActive || ClumpsClient.externalRendererRequested) {
             return;
         }
         beginTarget(commands, mainColorTexture(), OptionalInt.empty());
+    }
+
+    public void compositeClientOverlaysOnly(CommandEncoder commands, TextureView target) {
+        updateCompositionProjection();
+        prepareExternalOverlays(commands);
+        worldComposite.prepare(commands);
+        commands.transitionTexture(target, 2, TextureAccess.COLOR_ATTACHMENT, TextureLayout.COLOR_ATTACHMENT);
+        RenderPass pass = commands.beginRenderPass(target, OptionalInt.of(0x00000000), null, OptionalDouble.empty());
+        device.setViewportToTexture(pass, target);
+        if (!externalOverlays.isEmpty()) {
+            externalOverlayComposite.draw(commands, pass);
+        }
+        worldComposite.draw(commands, pass);
+        pass.end();
     }
 
     
@@ -264,6 +287,12 @@ public final class WorldRenderContext {
         externalOverlayComposite.destroy();
         depthTestedGeometry.destroy();
         overlayGeometry.destroy();
+        if (worldColorTexture != null) {
+            try { device.release(worldColorTexture); } catch (Throwable ignored) {}
+            worldColorTexture = null;
+        }
+        try { device.release(cameraUniforms); } catch (Throwable ignored) {}
+        try { device.release(compositionUniforms); } catch (Throwable ignored) {}
     }
 
     public DepthTestedWorldGeometry getDepthTestedGeometry() {

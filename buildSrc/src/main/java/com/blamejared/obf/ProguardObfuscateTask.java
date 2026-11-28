@@ -2,15 +2,28 @@ package com.blamejared.obf;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.RegularFileProperty;
@@ -34,6 +47,10 @@ public abstract class ProguardObfuscateTask extends DefaultTask {
 
     @Input
     public abstract Property<Long> getDictionarySeed();
+
+    @Input
+    @org.gradle.api.tasks.Optional
+    public abstract Property<Boolean> getSkipOptimization();
 
     @OutputFile
     public abstract RegularFileProperty getOutputJar();
@@ -71,8 +88,130 @@ public abstract class ProguardObfuscateTask extends DefaultTask {
         if (!outJar.exists() || outJar.length() == 0L) {
             throw new IllegalStateException("ProGuard failed to produce output JAR at " + outJar);
         }
+        if (Boolean.TRUE.equals(getSkipOptimization().getOrElse(false))) {
+            // ProGuard's built-in preverifier loses Uninitialized tracking on NEW..<init>
+            // blocks split by Skidfuscator flow predicates. Recompute clean Java 21 StackMapTables
+            // with ASM 9.10.1 (leaving Mixins untouched with ProGuard's own frames).
+            recomputeNonMixinFrames(outJar);
+        }
+        verifyWithHotSpot(outJar);
         getLogger().lifecycle("Stage 1 ProGuard complete: {} ({} bytes), mapping -> {}",
                 outJar.getName(), outJar.length(), mapFile.getAbsolutePath());
+    }
+
+    private void recomputeNonMixinFrames(File jarFile) throws Exception {
+        List<URL> urls = buildVerificationClasspath(jarFile);
+        Path temp = jarFile.toPath().resolveSibling(jarFile.getName() + ".frames.tmp");
+        int recomputed = 0;
+        try (URLClassLoader cl = new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
+             ZipFile zf = new ZipFile(jarFile);
+             ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(temp))) {
+            Enumeration<? extends ZipEntry> en = zf.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry e = en.nextElement();
+                if (e.isDirectory()) continue;
+                byte[] bytes;
+                try (InputStream in = zf.getInputStream(e)) {
+                    bytes = in.readAllBytes();
+                }
+                String name = e.getName();
+                if (name.endsWith(".class") && !name.startsWith("META-INF/")
+                        && !name.startsWith("com/blamejared/clumps/client/mixin/")) {
+                    ClassReader cr = new ClassReader(bytes);
+                    ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES) {
+                        @Override
+                        protected ClassLoader getClassLoader() {
+                            return cl;
+                        }
+
+                        @Override
+                        protected String getCommonSuperClass(String type1, String type2) {
+                            try {
+                                return super.getCommonSuperClass(type1, type2);
+                            } catch (Throwable ignored) {
+                                return "java/lang/Object";
+                            }
+                        }
+                    };
+                    cr.accept(cw, ClassReader.SKIP_FRAMES);
+                    bytes = cw.toByteArray();
+                    recomputed++;
+                }
+                ZipEntry ze = new ZipEntry(name);
+                ze.setTime(0L);
+                zos.putNextEntry(ze);
+                zos.write(bytes);
+                zos.closeEntry();
+            }
+        }
+        Files.move(temp, jarFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        getLogger().lifecycle("Stage 1 ASM frame recomputation complete: {} non-mixin classes updated.", recomputed);
+    }
+
+    private void verifyWithHotSpot(File jarFile) throws Exception {
+        List<URL> urls = buildVerificationClasspath(jarFile);
+        List<String> classNames = new ArrayList<>();
+        try (ZipFile zf = new ZipFile(jarFile)) {
+            Enumeration<? extends ZipEntry> en = zf.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry e = en.nextElement();
+                String n = e.getName();
+                if (n.endsWith(".class") && !n.startsWith("META-INF/")
+                        && !n.startsWith("com/blamejared/clumps/client/mixin/")) {
+                    classNames.add(n.substring(0, n.length() - 6).replace('/', '.'));
+                }
+            }
+        }
+        List<String> failures = new ArrayList<>();
+        int verified = 0;
+        try (URLClassLoader cl = new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader())) {
+            MethodHandles.Lookup baseLookup = MethodHandles.lookup();
+            for (String cn : classNames) {
+                try {
+                    Class<?> c = cl.loadClass(cn);
+                    MethodHandles.Lookup lk = MethodHandles.privateLookupIn(c, baseLookup);
+                    Method[] ms = c.getDeclaredMethods();
+                    if (ms.length > 0) {
+                        ms[0].setAccessible(true);
+                        lk.unreflect(ms[0]);
+                    } else {
+                        Constructor<?>[] cs = c.getDeclaredConstructors();
+                        if (cs.length > 0) {
+                            cs[0].setAccessible(true);
+                            lk.unreflectConstructor(cs[0]);
+                        }
+                    }
+                    verified++;
+                } catch (VerifyError | ClassFormatError ve) {
+                    String msg = ve.getMessage();
+                    failures.add(cn + " -> " + (msg == null ? ve.toString() : msg.split("\n")[0]));
+                } catch (NoClassDefFoundError | UnsatisfiedLinkError | IncompatibleClassChangeError ignored) {
+                    // Optional third-party bridge class not on compileClasspath
+                } catch (Throwable t) {
+                    if (t.getCause() instanceof VerifyError ve) {
+                        String msg = ve.getMessage();
+                        failures.add(cn + " -> " + (msg == null ? ve.toString() : msg.split("\n")[0]));
+                    }
+                }
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new IllegalStateException("HotSpot bytecode verification FAILED on " + failures.size()
+                    + " class(es):\n  " + String.join("\n  ", failures.subList(0, Math.min(15, failures.size()))));
+        }
+        getLogger().lifecycle("Stage 1 HotSpot ClassVerifier PASSED: {} / {} classes linked cleanly with 0 VerifyErrors.",
+                verified, classNames.size());
+    }
+
+    private List<URL> buildVerificationClasspath(File jarFile) throws Exception {
+        List<URL> urls = new ArrayList<>();
+        urls.add(jarFile.toURI().toURL());
+        for (File lib : getLibraryClasspath().getFiles()) {
+            if (lib.isFile() && lib.getName().endsWith(".jar") && !lib.equals(jarFile)) {
+                urls.add(lib.toURI().toURL());
+            }
+        }
+        return urls;
     }
 
     private String buildRules(File inJar, File outJar, File mapFile, File classDict, File memberDict) {
@@ -98,7 +237,11 @@ public abstract class ProguardObfuscateTask extends DefaultTask {
         }
 
         sb.append("\n# --- Optimization, Shrinking & Aggressive Renaming ---\n");
-        sb.append("-optimizationpasses 2\n");
+        if (Boolean.TRUE.equals(getSkipOptimization().getOrElse(false))) {
+            sb.append("-dontoptimize\n");
+        } else {
+            sb.append("-optimizationpasses 2\n");
+        }
         sb.append("-allowaccessmodification\n");
         sb.append("-overloadaggressively\n");
         sb.append("-repackageclasses 'com.blamejared.clumps.internal'\n");

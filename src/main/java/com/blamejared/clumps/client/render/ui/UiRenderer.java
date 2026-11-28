@@ -408,7 +408,7 @@ public class UiRenderer {
     }
 
     public void beginFrame() {
-        if (ClumpsClient.externalRendererActive) {
+        if (ClumpsClient.externalRendererActive || ClumpsClient.externalRendererRequested) {
             return;
         }
         resetFrame(ClumpsClient.commandEncoder);
@@ -416,6 +416,10 @@ public class UiRenderer {
         passFactory = () -> commands.beginExternalRenderPass(() -> new MinecraftRenderPass(
                 framebuffer.getColorAttachmentView(), OptionalInt.empty(), framebuffer.getDepthAttachmentView(), OptionalDouble.of(clearDepth())));
         frameActive = true;
+    }
+
+    public boolean hasPendingCalls() {
+        return !frameCalls.isEmpty() || !retainedCalls.isEmpty();
     }
 
     public void beginFrame(CommandEncoder commands, TextureView color, TextureView depth, OptionalInt clearColor) {
@@ -433,7 +437,7 @@ public class UiRenderer {
     }
 
     public void updateBackdrop() {
-        if (ClumpsClient.externalRendererActive) {
+        if (ClumpsClient.externalRendererActive || ClumpsClient.externalRendererRequested) {
             return;
         }
         updateBackdrop(ClumpsClient.commandEncoder);
@@ -526,6 +530,7 @@ public class UiRenderer {
     }
 
     public void destroy() {
+        clearItemCache();
         for (RenderBatch batch : batches) {
             batch.destroy();
         }
@@ -533,5 +538,14 @@ public class UiRenderer {
             backdrop.close();
         }
         device.release(cameraBuffer);
+    }
+
+    public void clearItemCache() {
+        if (items != null) {
+            try {
+                items.clear();
+            } catch (Throwable ignored) {
+            }
+        }
     }
 }

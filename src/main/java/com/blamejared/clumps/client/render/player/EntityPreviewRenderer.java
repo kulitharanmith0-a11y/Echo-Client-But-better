@@ -44,4 +44,15 @@ public final class EntityPreviewRenderer {
         }
         return renderer;
     }
+
+    public static void dispose() {
+        EntityGuiElementRenderer current = renderer;
+        renderer = null;
+        if (current != null) {
+            try {
+                current.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
 }

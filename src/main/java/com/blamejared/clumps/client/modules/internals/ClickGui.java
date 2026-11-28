@@ -10,6 +10,7 @@ import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.ChoiceSetting;
 import com.blamejared.clumps.client.settings.ColorSetting;
 import com.blamejared.clumps.client.settings.FloatSetting;
+import com.blamejared.clumps.client.settings.TextSetting;
 import org.lwjgl.system.Platform;
 
 public class ClickGui extends Module {
@@ -18,12 +19,24 @@ public class ClickGui extends Module {
     public static final boolean SUPPORTS_STREAM_PROOF;
     private static final String SCROLL_SPEED_TOOLTIP;
     private static final String APPEARANCE_TOOLTIP = "Appearance";
+    private static final String BACKGROUND_MEDIA_TOOLTIP = "Background Media";
     private static final CharSequence THEME_OBSIDIAN = CatalogText.literal("Obsidian");
     private static final CharSequence THEME_EMERALD = CatalogText.literal("Emerald");
     private static final CharSequence THEME_VIOLET = CatalogText.literal("Midnight Violet");
     private static final CharSequence THEME_OCEAN = CatalogText.literal("Ocean Blue");
     private static final CharSequence THEME_CRIMSON = CatalogText.literal("Crimson");
     private static final CharSequence THEME_CUSTOM = CatalogText.literal("Custom");
+    private static final CharSequence FIT_COVER = CatalogText.literal("Cover");
+    private static final CharSequence FIT_CONTAIN = CatalogText.literal("Contain");
+    private static final CharSequence FIT_STRETCH = CatalogText.literal("Stretch");
+    private static final CharSequence SP_FPS_60 = CatalogText.literal("60 FPS");
+    private static final CharSequence SP_FPS_120 = CatalogText.literal("120 FPS");
+    private static final CharSequence SP_FPS_UNCAPPED = CatalogText.literal("Uncapped");
+
+    public static final ChoiceSetting streamProofFps = new ChoiceSetting(
+            CatalogText.literal("StreamProof FPS"),
+            SP_FPS_60,
+            SP_FPS_60, SP_FPS_120, SP_FPS_UNCAPPED);
 
     public static final ChoiceSetting theme = new ChoiceSetting(
             CatalogText.literal("Theme"),
@@ -41,6 +54,14 @@ public class ClickGui extends Module {
             CatalogText.literal("Background Dim"), 0.55F, 0.0F, 0.85F, 0.05F);
     public static final FloatSetting uiScale = new FloatSetting(
             CatalogText.literal("UI Scale"), 1.0F, 0.75F, 1.25F, 0.05F, CatalogText.literal("x"));
+    public static final TextSetting backgroundMediaPath = new TextSetting(
+            CatalogText.literal("Media Path"), "PNG, JPG, GIF, or MP4 path...");
+    public static final FloatSetting backgroundMediaOpacity = new FloatSetting(
+            CatalogText.literal("Media Opacity"), 0.65F, 0.05F, 1.0F, 0.05F);
+    public static final ChoiceSetting backgroundMediaFit = new ChoiceSetting(
+            CatalogText.literal("Media Fit"), FIT_COVER, FIT_COVER, FIT_CONTAIN, FIT_STRETCH);
+    public static final BooleanSetting backgroundMediaInsideGui = new BooleanSetting(
+            CatalogText.literal("Clip To Window"), false);
 
     private static boolean syncingStreamProof;
 
@@ -58,6 +79,8 @@ public class ClickGui extends Module {
     public void postInitialize() {
         streamProof.onChange(ClickGui::applyStreamProofSetting);
         streamProof.setVisibilityPredicate(ClickGui::isStreamProofSettingVisible);
+        streamProofFps.setVisibilityPredicate(ignored -> SUPPORTS_STREAM_PROOF && streamProof != null && streamProof.getValue());
+        streamProofFps.description(CatalogText.literal("Overlay refresh rate while StreamProof is showing HUD/ESP/GUI (lower saves GPU/CPU; Minecraft itself stays uncapped)"));
         scrollSpeed.tooltip(SCROLL_SPEED_TOOLTIP);
 
         theme.tooltip(APPEARANCE_TOOLTIP);
@@ -78,9 +101,23 @@ public class ClickGui extends Module {
         backgroundBlur.description(CatalogText.literal("Blurs the game world behind the ClickGUI"));
         backgroundDim.description(CatalogText.literal("Darkness of the screen backdrop behind the ClickGUI"));
         uiScale.description(CatalogText.literal("Scales the ClickGUI up or down"));
+
+        backgroundMediaPath.setMaximumLength(512);
+        backgroundMediaPath.tooltip(BACKGROUND_MEDIA_TOOLTIP);
+        backgroundMediaOpacity.tooltip(BACKGROUND_MEDIA_TOOLTIP);
+        backgroundMediaFit.tooltip(BACKGROUND_MEDIA_TOOLTIP);
+        backgroundMediaInsideGui.tooltip(BACKGROUND_MEDIA_TOOLTIP);
+        backgroundMediaOpacity.setVisibilityPredicate(ignored -> hasBackgroundMedia());
+        backgroundMediaFit.setVisibilityPredicate(ignored -> hasBackgroundMedia());
+        backgroundMediaInsideGui.setVisibilityPredicate(ignored -> hasBackgroundMedia());
+        backgroundMediaPath.description(CatalogText.literal("Local image (.png/.jpg), animated .gif, or video (.mp4/.webm with ffmpeg) rendered behind the ClickGUI"));
+        backgroundMediaOpacity.description(CatalogText.literal("Opacity of the custom background image, GIF, or video"));
+        backgroundMediaFit.description(CatalogText.literal("How the background media fits the screen or ClickGUI bounds"));
+        backgroundMediaInsideGui.description(CatalogText.literal("Clip background media inside the ClickGUI frame instead of full screen"));
     }
 
     public static void appendAppearanceSettings(ClickGui module) {
+        CatalogSettings.append(module, streamProofFps);
         CatalogSettings.append(module, theme);
         CatalogSettings.append(module, accentColor);
         CatalogSettings.append(module, panelColor);
@@ -88,6 +125,50 @@ public class ClickGui extends Module {
         CatalogSettings.append(module, backgroundBlur);
         CatalogSettings.append(module, backgroundDim);
         CatalogSettings.append(module, uiScale);
+        CatalogSettings.append(module, backgroundMediaPath);
+        CatalogSettings.append(module, backgroundMediaOpacity);
+        CatalogSettings.append(module, backgroundMediaFit);
+        CatalogSettings.append(module, backgroundMediaInsideGui);
+    }
+
+    public static long streamProofMinFrameNanos() {
+        if (streamProofFps.isSelected(SP_FPS_UNCAPPED)) {
+            return 0L;
+        }
+        if (streamProofFps.isSelected(SP_FPS_120)) {
+            return 1_000_000_000L / 120L;
+        }
+        return 1_000_000_000L / 60L;
+    }
+
+    public static boolean hasBackgroundMedia() {
+        String text = backgroundMediaPath.getText();
+        return text != null && !text.trim().isEmpty();
+    }
+
+    public static String backgroundMediaFile() {
+        String text = backgroundMediaPath.getText();
+        if (text == null) return "";
+        String cleaned = text.trim();
+        if (cleaned.length() >= 2 && ((cleaned.startsWith("\"") && cleaned.endsWith("\""))
+                || (cleaned.startsWith("'") && cleaned.endsWith("'")))) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
+        }
+        return cleaned;
+    }
+
+    public static float backgroundMediaOpacityValue() {
+        return Math.max(0.05F, Math.min(1.0F, backgroundMediaOpacity.getValue()));
+    }
+
+    public static String backgroundMediaFitMode() {
+        if (backgroundMediaFit.isSelected(FIT_CONTAIN)) return "CONTAIN";
+        if (backgroundMediaFit.isSelected(FIT_STRETCH)) return "STRETCH";
+        return "COVER";
+    }
+
+    public static boolean clipBackgroundMediaToGui() {
+        return backgroundMediaInsideGui.getValue();
     }
 
     public static boolean isDefaultObsidianTheme() {

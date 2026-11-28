@@ -11,6 +11,7 @@ import com.blamejared.clumps.client.modules.ModuleInfo;
 import com.blamejared.clumps.client.mixin.accessor.PersistentProjectileEntityAccessor;
 import com.blamejared.clumps.client.render.world.WorldGeometry;
 import com.blamejared.clumps.client.render.world.WorldProjection;
+import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.ColorSetting;
 import com.blamejared.clumps.client.settings.MultiChoiceSetting;
 import com.blamejared.clumps.client.utils.trajectory.BlockImpactProjectileTrajectories;
@@ -19,9 +20,11 @@ import com.blamejared.clumps.client.utils.trajectory.CrossbowTrajectories;
 import com.blamejared.clumps.client.utils.trajectory.FluidAwareProjectileTrajectories;
 import com.blamejared.clumps.client.utils.trajectory.ThrownProjectileTrajectories;
 import com.blamejared.clumps.client.utils.trajectory.WindChargeTrajectories;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.FireworkRocketEntity;
 import net.minecraft.entity.projectile.PersistentProjectileEntity;
 import net.minecraft.entity.projectile.thrown.PotionEntity;
@@ -57,6 +60,9 @@ public class Trajectories extends Module {
     private static ColorSetting crossbowColor;
     private static ColorSetting fireworkColor;
     private static ColorSetting arrowColor;
+    private static final BooleanSetting players = new BooleanSetting(literal("Players"), true);
+    private static final BooleanSetting includeSelf = new BooleanSetting(literal("Include Self"), false);
+    private static final ColorSetting playerColor = new ColorSetting(literal("Player Color"), 80, 220, 255, 220);
 
     public Trajectories() {
         super(new ModuleInfo(literal("Trajectories"), literal("Renders projectile trajectories"), ModuleCategory.RENDER));
@@ -85,6 +91,10 @@ public class Trajectories extends Module {
         crossbowColor.tooltip("Appearance");
         fireworkColor.tooltip("Appearance");
         arrowColor.tooltip("Appearance");
+        players.description(literal("Predicts and renders where airborne players will land"));
+        includeSelf.setVisibilityPredicate(ignored -> players.getValue());
+        playerColor.setVisibilityPredicate(ignored -> players.getValue());
+        playerColor.tooltip("Appearance");
     }
 
     @Subscribe
@@ -156,6 +166,62 @@ public class Trajectories extends Module {
                 }
             }
         }
+        if (players.getValue()) {
+            int argb = trajectoryColor(playerColor);
+            for (PlayerEntity player : client.world.getPlayers()) {
+                if (!includeSelf.getValue() && player == client.player) continue;
+                if (!player.isAlive() || player.isSpectator() || player.isOnGround()
+                        || player.isTouchingWater() || player.isClimbing() || player.isGliding()) continue;
+                List<Vec3d> arc = predictPlayerLandingArc(player, tickDelta);
+                if (arc.size() >= 2) {
+                    drawTrajectory(geometry, arc, argb);
+                }
+            }
+        }
+    }
+
+    private List<Vec3d> predictPlayerLandingArc(PlayerEntity player, float tickDelta) {
+        double x = MathHelper.lerp(tickDelta, player.lastX, player.getX());
+        double y = MathHelper.lerp(tickDelta, player.lastY, player.getY());
+        double z = MathHelper.lerp(tickDelta, player.lastZ, player.getZ());
+        Vec3d vel = player.getVelocity();
+        double vx = vel.x;
+        double vy = vel.y;
+        double vz = vel.z;
+        if (player != client.player && (vx * vx + vy * vy + vz * vz) < 1.0E-4) {
+            vx = player.getX() - player.lastX;
+            vy = player.getY() - player.lastY;
+            vz = player.getZ() - player.lastZ;
+        }
+        if (Math.abs(vy) < 0.02 && (vx * vx + vz * vz) < 0.002) {
+            return List.of();
+        }
+        List<Vec3d> points = new ArrayList<>(32);
+        points.add(new Vec3d(x, y, z));
+        for (int tick = 0; tick < 80; tick++) {
+            Vec3d start = new Vec3d(x, y, z);
+            double nx = x + vx;
+            double ny = y + vy;
+            double nz = z + vz;
+            Vec3d end = new Vec3d(nx, ny, nz);
+            BlockHitResult hit = client.world.raycast(new RaycastContext(
+                    start, end, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, player));
+            if (hit != null && hit.getType() != HitResult.Type.MISS) {
+                points.add(hit.getPos());
+                break;
+            }
+            points.add(end);
+            x = nx;
+            y = ny;
+            z = nz;
+            vx *= 0.91;
+            vy = (vy - 0.08) * 0.98;
+            vz *= 0.91;
+            if (y < client.world.getBottomY() - 16) {
+                break;
+            }
+        }
+        return points;
     }
 
     private int bowChargeTicks() {
@@ -237,6 +303,9 @@ public class Trajectories extends Module {
         CatalogSettings.append(Module, crossbowColor);
         CatalogSettings.append(Module, fireworkColor);
         CatalogSettings.append(Module, arrowColor);
+        CatalogSettings.append(Module, players);
+        CatalogSettings.append(Module, includeSelf);
+        CatalogSettings.append(Module, playerColor);
     }
 
     public static CharSequence bootstrapTrajectoriesOption2() { return PEARL; }

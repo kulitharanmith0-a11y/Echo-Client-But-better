@@ -49,7 +49,8 @@ public abstract class WindowMixin implements com.blamejared.clumps.client.platfo
     @Override
     public void invalidateFullscreenState() {
         boolean exclusiveMonitor = handle != 0L && GLFW.glfwGetWindowMonitor(handle) != 0L;
-        if (exclusiveMonitor && ClumpsClient.externalRendererActive && !ClumpsClient.eventsDisabled) {
+        boolean streamProof = ClumpsClient.externalRendererActive || ClumpsClient.externalRendererRequested;
+        if (exclusiveMonitor && streamProof && !ClumpsClient.eventsDisabled) {
             fullscreen = true;
             currentFullscreen = false;
             return;
@@ -66,7 +67,8 @@ public abstract class WindowMixin implements com.blamejared.clumps.client.platfo
 
     @Redirect(method = "updateWindowRegion", at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFW;glfwSetWindowMonitor(JJIIIII)V", remap = false))
     private void applyBorderlessFullscreen(long window, long monitor, int requestedX, int requestedY, int requestedWidth, int requestedHeight, int refreshRate) {
-        if (monitor != 0L && !ClumpsClient.eventsDisabled && ClumpsClient.externalRendererActive && Platform.get() == Platform.WINDOWS) {
+        boolean streamProof = ClumpsClient.externalRendererActive || ClumpsClient.externalRendererRequested;
+        if (monitor != 0L && !ClumpsClient.eventsDisabled && streamProof && Platform.get() == Platform.WINDOWS) {
             if (GLFW.glfwGetWindowMonitor(window) != 0L) {
                 GLFW.glfwSetWindowMonitor(window, 0L, 0, 0, Math.max(1, requestedWidth), Math.max(1, requestedHeight), GLFW.GLFW_DONT_CARE);
             }
@@ -96,11 +98,13 @@ public abstract class WindowMixin implements com.blamejared.clumps.client.platfo
             GLFW.glfwSetWindowAttrib(window, GLFW.GLFW_FLOATING, GLFW.GLFW_FALSE);
             GLFW.glfwSetWindowAttrib(window, GLFW.GLFW_DECORATED, GLFW.GLFW_FALSE);
             GLFW.glfwSetWindowMonitor(window, 0L, monitorX[0], monitorY[0], fullscreenWidth, fullscreenHeight, GLFW.GLFW_DONT_CARE);
+            GLFW.glfwFocusWindow(window);
             clumps$borderlessMonitor = monitor;
             x = monitorX[0];
             y = monitorY[0];
             width = fullscreenWidth;
             height = fullscreenHeight;
+            EventBus.post(new WindowSizeEvent(fullscreenWidth, fullscreenHeight));
         } else {
             clumps$restoreDisplayMode();
             clumps$restoreDecorations(window);

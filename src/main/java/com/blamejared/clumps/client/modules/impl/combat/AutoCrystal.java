@@ -7,6 +7,7 @@ import com.blamejared.clumps.client.event.input.UseKeyEvent;
 import com.blamejared.clumps.client.event.interaction.BlockBreakingEvent;
 import com.blamejared.clumps.client.modules.Module;
 import com.blamejared.clumps.client.handlers.DeferredActionQueue;
+import com.blamejared.clumps.client.handlers.LatencyTracker;
 import com.blamejared.clumps.client.render.bridge.MinecraftRenderState;
 import com.blamejared.clumps.client.settings.BooleanSetting;
 import com.blamejared.clumps.client.settings.ChoiceSetting;
@@ -30,14 +31,18 @@ import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 
 public class AutoCrystal extends Module {
     private static final double NEARBY_DEATH_RADIUS = 6.0;
+    private static final double DAMAGE_TICK_TARGET_RADIUS_SQ = 8.0 * 8.0;
+    private static final int MAX_DAMAGE_TICK_WAIT = 12;
     private static final CharSequence returnToOption3 = CatalogText.literal("Original");
     private static final CharSequence returnToOption = CatalogText.literal("Slot");
     private static final CharSequence returnToOption2 = CatalogText.literal("Item");
     private static FloatRangeSetting placeDelay;
     private static FloatRangeSetting breakDelay;
+    private static BooleanSetting damageTick;
     private static IntSetting failChance;
     private static BooleanSetting stopOnKill;
     private static BooleanSetting fakePunch;
@@ -59,6 +64,9 @@ public class AutoCrystal extends Module {
     private boolean obsidianPlacementPending;
     private boolean lastActionWasPlacement;
     private boolean actionSentThisTick;
+    private long lastCrystalBreakTick = -100L;
+    private int damageTickTargetId = -1;
+    private boolean sawHurtAfterBreak;
     private static String placeDelayTooltip;
     private static String breakDelayTooltip;
     private static String placeObsidianTooltip;
@@ -94,6 +102,10 @@ public class AutoCrystal extends Module {
         placeDelay.tooltip(placeDelayTooltip);
         if (breakDelayTooltip == null) breakDelayTooltip = "Timing";
         breakDelay.tooltip(breakDelayTooltip);
+        if (damageTick != null) {
+            damageTick.tooltip(breakDelayTooltip);
+            damageTick.description(CatalogText.literal("Waits for the enemy's 10-tick damage immunity (i-frame) to clear before breaking the next crystal"));
+        }
         if (placeObsidianTooltip == null) placeObsidianTooltip = "Hit Crystal";
         placeObsidian.tooltip(placeObsidianTooltip);
         if (obsidianOptionsTooltip == null) obsidianOptionsTooltip = "Hit Crystal";
@@ -114,6 +126,7 @@ public class AutoCrystal extends Module {
         breakTimer.reset();
         lastActionWasPlacement = true;
         actionSentThisTick = false;
+        resetDamageTickState();
         resetSequence(false);
     }
 
@@ -122,6 +135,7 @@ public class AutoCrystal extends Module {
         resetSequence(false);
         lastActionWasPlacement = true;
         actionSentThisTick = false;
+        resetDamageTickState();
         super.onDisable();
     }
 
@@ -129,6 +143,7 @@ public class AutoCrystal extends Module {
     private void onAttackKey(AttackKeyEvent event) {
         actionSentThisTick = false;
         if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || activateKey.isListeningForKey()) return;
+        updateDamageTickObservation();
         if (!activateKey.getKey().isPressed()) {
             if (stage != CrystalPlacementStage.NONE) resetSequence(switchBack.getValue());
             lastActionWasPlacement = true;
@@ -142,7 +157,9 @@ public class AutoCrystal extends Module {
         if (shouldFakePunch()) {
             if (!breakTimer.hasElapsedTicks(sampleDelayTicks(breakDelay))) return;
             if (!lastActionWasPlacement && placeTimer.hasElapsedTicks(sampleDelayTicks(placeDelay))) return;
+            if (isDamageTickEnabled() && shouldWaitForDamageTick(client.player.getEntityPos())) return;
             if (!rollFailure() && !actions().requestAttackClick(this, event)) return;
+            recordCrystalBreak(client.player.getEntityPos());
             breakTimer.reset();
             lastActionWasPlacement = false;
             actionSentThisTick = true;
@@ -150,12 +167,13 @@ public class AutoCrystal extends Module {
         }
         if (event.hasClicks() && shouldSuppressMining()) event.setClickCount(0);
         if (stage != CrystalPlacementStage.NONE && stage != CrystalPlacementStage.CRYSTAL) return;
-        if (!InventoryItems.holdsInEitherHand(Items.END_CRYSTAL)) return;
         if (!(client.crosshairTarget instanceof EntityHitResult hit)
                 || !(hit.getEntity() instanceof EndCrystalEntity crystal)
                 || crystal.isRemoved() || !crystal.isAlive()) return;
+        if (isDamageTickEnabled() && shouldWaitForDamageTick(crystal.getEntityPos())) return;
         if (!breakTimer.hasElapsedTicks(sampleDelayTicks(breakDelay))) return;
         if (!event.hasClicks() && !rollFailure() && !actions().requestAttackClick(this, event)) return;
+        recordCrystalBreak(crystal.getEntityPos());
         breakTimer.reset();
     }
 
@@ -382,9 +400,77 @@ public class AutoCrystal extends Module {
     }
 
     
+    private boolean isDamageTickEnabled() {
+        return damageTick != null && damageTick.getValue();
+    }
+
+    private void resetDamageTickState() {
+        lastCrystalBreakTick = -100L;
+        damageTickTargetId = -1;
+        sawHurtAfterBreak = false;
+    }
+
+    private void updateDamageTickObservation() {
+        if (damageTickTargetId < 0 || client.world == null || client.player == null) return;
+        long ticksSinceBreak = client.player.age - lastCrystalBreakTick;
+        if (ticksSinceBreak > MAX_DAMAGE_TICK_WAIT || ticksSinceBreak < 0L) {
+            damageTickTargetId = -1;
+            sawHurtAfterBreak = false;
+            return;
+        }
+        if (client.world.getEntityById(damageTickTargetId) instanceof PlayerEntity enemy
+                && enemy.isAlive() && enemy.hurtTime > 0) {
+            sawHurtAfterBreak = true;
+        }
+    }
+
+    private void recordCrystalBreak(Vec3d center) {
+        if (client.player == null) return;
+        lastCrystalBreakTick = client.player.age;
+        PlayerEntity target = findNearestEnemy(center);
+        damageTickTargetId = target == null ? -1 : target.getId();
+        sawHurtAfterBreak = target != null && target.hurtTime > 0;
+    }
+
+    private boolean shouldWaitForDamageTick(Vec3d center) {
+        if (client.player == null || client.world == null) return false;
+        PlayerEntity target = null;
+        if (damageTickTargetId >= 0
+                && client.world.getEntityById(damageTickTargetId) instanceof PlayerEntity tracked
+                && tracked.isAlive() && !tracked.isRemoved()
+                && tracked.squaredDistanceTo(center) <= DAMAGE_TICK_TARGET_RADIUS_SQ) {
+            target = tracked;
+        }
+        if (target == null) target = findNearestEnemy(center);
+        if (target == null) return false;
+        if (target.hurtTime > 0 && target.getId() == damageTickTargetId) sawHurtAfterBreak = true;
+        long ticksSinceBreak = client.player.age - lastCrystalBreakTick;
+        return DtapSetup.shouldHoldBreakForTickTiming(
+                target.hurtTime, ticksSinceBreak, sawHurtAfterBreak, LatencyTracker.milliseconds());
+    }
+
+    private static PlayerEntity findNearestEnemy(Vec3d center) {
+        if (client.world == null || client.player == null) return null;
+        PlayerEntity nearest = null;
+        double bestDistSq = DAMAGE_TICK_TARGET_RADIUS_SQ;
+        for (PlayerEntity player : client.world.getPlayers()) {
+            if (player == client.player || !player.isAlive() || player.isSpectator()) continue;
+            double distSq = player.squaredDistanceTo(center);
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                nearest = player;
+            }
+        }
+        return nearest;
+    }
+
     public static void appendBootstrapSettings(AutoCrystal Module) {
+        if (AutoCrystal.damageTick == null) {
+            AutoCrystal.damageTick = new BooleanSetting(CatalogText.literal("Damage Tick"), false);
+        }
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.placeDelay);
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.breakDelay);
+        com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.damageTick);
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.failChance);
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.stopOnKill);
         com.blamejared.clumps.client.init.CatalogSettings.append(Module, AutoCrystal.fakePunch);

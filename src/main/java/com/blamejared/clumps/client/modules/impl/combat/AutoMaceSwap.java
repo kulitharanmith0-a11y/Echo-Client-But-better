@@ -122,6 +122,7 @@ public class AutoMaceSwap extends Module {
     public static FloatSetting fallDistance;
     public static FloatRangeSetting cps;
     public static FloatRangeSetting delay;
+    public static BooleanSetting pauseOnUse = new BooleanSetting(literal("Pause On Use"), true);
     public static ItemListSetting itemWhitelist;
     public static HotbarSlotsSetting hotbarWhitelist;
     public static BooleanSetting stunSlam;
@@ -221,6 +222,8 @@ public class AutoMaceSwap extends Module {
         verticalSpeed.tooltip("Timing");
         itemWhitelist.tooltip("Conditions");
         hotbarWhitelist.tooltip("Conditions");
+        pauseOnUse.tooltip("Conditions");
+        pauseOnUse.description(literal("Pauses auto mace swap, stun slam, and auto aim while eating, drinking, blocking with a shield, or using an item"));
         maceSwapRanges.tooltip("Mace Priority");
         maceSwapRanges.description(literal("Top to bottom, the first entry with a usable mace inside its fall distance wins. Disabled entries block maces carrying them"));
 
@@ -342,7 +345,7 @@ public class AutoMaceSwap extends Module {
             }
             return;
         }
-        if (isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+        if (isOutsideWorld() || MinecraftRenderState.getScreen() != null || isBlockedByItemUse()) {
             rotations().beginReturn(this);
             return;
         }
@@ -350,10 +353,7 @@ public class AutoMaceSwap extends Module {
         boolean equipmentUnequipping = hasEquipmentSwap(false)
                 && (!silentRotations.getValue() || !client.player.isGliding());
         double approachSpeed = client.player.getVelocity().length();
-        boolean airborneMace = !client.player.isGliding() && !client.player.isOnGround()
-                && !client.player.isTouchingWater() && !client.player.isClimbing()
-                && (client.player.getVelocity().y < -0.05
-                || (InventoryItems.mainHandStack().isOf(Items.MACE) && isSmashReady()));
+        boolean airborneMace = isAirborneForMaceAim();
         if (stunTarget == null && !equipmentUnequipping && !airborneMace) {
             releaseOrCancelRotation();
             return;
@@ -402,7 +402,9 @@ public class AutoMaceSwap extends Module {
         boolean outsideImmediateReach = targetBox.squaredMagnitude(eye) > reachMargin * reachMargin;
         double dx = target.getX() - eye.x;
         double dz = target.getZ() - eye.z;
-        boolean directlyOverhead = (dx * dx + dz * dz) < 0.72 * 0.72 && eye.y > targetBox.maxY - 0.1;
+        boolean silentOrBlatant = silentRotations.getValue() || aimMath.isSelected(BLATANT);
+        double overheadRadius = silentOrBlatant ? 0.72 : 0.42;
+        boolean directlyOverhead = (dx * dx + dz * dz) < overheadRadius * overheadRadius && eye.y > targetBox.maxY - 0.1;
         if (directlyOverhead) {
             // Aim smoothly at the upper center surface when directly overhead to prevent 180-degree yaw spin.
             Vec3d topPoint = new Vec3d(
@@ -410,7 +412,7 @@ public class AutoMaceSwap extends Module {
                     targetBox.maxY - 0.12,
                     MathHelper.clamp(eye.z, targetBox.minZ + 0.08, targetBox.maxZ - 0.08));
             accepted = rotations().aim(this, RotationPriority.HIGH, topPoint, rotationSettings(target));
-        } else if (prediction != null && prediction.target() == target && prediction.impactTick() >= 1
+        } else if (silentOrBlatant && prediction != null && prediction.target() == target && prediction.impactTick() >= 1
                 && outsideImmediateReach && approachSpeed >= 0.75) {
             int leadTicks = Math.min(2, prediction.impactTick());
             accepted = rotations().aim(this, RotationPriority.HIGH,
@@ -493,7 +495,7 @@ public class AutoMaceSwap extends Module {
 
     @Subscribe(priority = EventPriority.HIGH)
     private void onHotbarKey(HotbarKeyEvent event) {
-        if (disablePending || isOutsideWorld() || MinecraftRenderState.getScreen() != null) {
+        if (disablePending || isOutsideWorld() || MinecraftRenderState.getScreen() != null || isBlockedByItemUse()) {
             return;
         }
         if (event.slot == 0) {
@@ -1114,7 +1116,7 @@ public class AutoMaceSwap extends Module {
     }
 
     private boolean canInitiateHotbarSwap() {
-        if (EntityInteractions.isUsingOffhand() || !itemWhitelist.acceptsHeldItem()
+        if (isBlockedByItemUse() || EntityInteractions.isUsingOffhand() || !itemWhitelist.acceptsHeldItem()
                 || !hotbarWhitelist.permitsCurrentSlot()) {
             return false;
         }
@@ -1805,39 +1807,82 @@ public class AutoMaceSwap extends Module {
 
     private RotationSettings rotationSettings(LivingEntity target) {
         boolean silent = silentRotations.getValue();
+        AimTransition transition = aimTransition();
+        if (!silent && transition != AimTransition.SNAP) {
+            // Visible Smooth / Natural aim: honor slider speeds smoothly without jarring speed spikes.
+            float hSpeed = Math.max(15.0F, horizontalSpeed.getValue() * 18.0F);
+            float vSpeed = Math.max(15.0F, verticalSpeed.getValue() * 18.0F);
+            if (client.player != null) {
+                double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
+                float gentleBoost = (float) MathHelper.clamp(1.0 + Math.max(0.0, fallSpeed - 0.65) * 0.35, 1.0, 1.35);
+                hSpeed *= gentleBoost;
+                vSpeed *= gentleBoost;
+            }
+            return new RotationSettings(RotationVisibility.VISIBLE, transition, hSpeed, vSpeed);
+        }
         float hSpeed = horizontalSpeed.getValue() * 32.0F;
         float vSpeed = verticalSpeed.getValue() * 36.0F;
-        AimTransition transition = aimTransition();
         if (transition != AimTransition.SNAP && client.player != null) {
             double speed = client.player.getVelocity().length();
             double fallSpeed = Math.max(0.0, -client.player.getVelocity().y);
             float velocityBoost = (float) MathHelper.clamp(1.0 + Math.max(speed - 0.35, fallSpeed - 0.30) * 1.35, 1.0, 3.0);
-            if (silent) {
-                boolean stunActive = activeStunTarget() != null || isStunSequenceActive();
-                boolean urgent = stunActive || isSmashReady() || hasEquipmentSwap(false) || attackPending;
-                if (!urgent && target != null) {
-                    double reach = currentWeaponReach() + 1.5;
-                    urgent = target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F)) <= reach * reach;
-                }
-                float scale = (stunActive ? 4.8F : urgent ? 2.6F : 1.75F) * velocityBoost;
-                hSpeed *= scale;
-                vSpeed *= scale;
-                if (stunActive) {
-                    boolean slamTickImmediate = (stunAwaitTargetId != -1 || pendingStunFollowup)
-                            && target != null
-                            && target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F))
-                                    <= (currentWeaponReach() + 0.85) * (currentWeaponReach() + 0.85);
-                    transition = slamTickImmediate ? AimTransition.SNAP : AimTransition.EASED;
-                }
-            } else {
-                boolean stunActive = activeStunTarget() != null || isStunSequenceActive();
-                float visibleBoost = MathHelper.clamp(velocityBoost * (stunActive ? 1.65F : 1.0F), 1.0F, 3.8F);
-                hSpeed *= visibleBoost;
-                vSpeed *= visibleBoost;
+            boolean stunActive = activeStunTarget() != null || isStunSequenceActive();
+            boolean urgent = stunActive || isSmashReady() || hasEquipmentSwap(false) || attackPending;
+            if (!urgent && target != null) {
+                double reach = currentWeaponReach() + 1.5;
+                urgent = target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F)) <= reach * reach;
+            }
+            float scale = (stunActive ? 4.8F : urgent ? 2.6F : 1.75F) * velocityBoost;
+            hSpeed *= scale;
+            vSpeed *= scale;
+            if (stunActive) {
+                boolean slamTickImmediate = (stunAwaitTargetId != -1 || pendingStunFollowup)
+                        && target != null
+                        && target.getBoundingBox().squaredMagnitude(client.player.getCameraPosVec(1.0F))
+                                <= (currentWeaponReach() + 0.85) * (currentWeaponReach() + 0.85);
+                transition = slamTickImmediate ? AimTransition.SNAP : AimTransition.EASED;
             }
         }
         return new RotationSettings(silent ? RotationVisibility.SILENT : RotationVisibility.VISIBLE,
                 transition, hSpeed, vSpeed);
+    }
+
+    private boolean isBlockedByItemUse() {
+        if (!pauseOnUse.getValue() || client.player == null || !client.player.isUsingItem()) {
+            return false;
+        }
+        ItemStack active = client.player.getActiveItem();
+        if (spearDTap.getValue() && active != null && !active.isEmpty() && InventoryItems.isSpear(active.getItem())) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isAirborneForMaceAim() {
+        if (client.player == null || client.player.isGliding() || client.player.isOnGround()
+                || client.player.isTouchingWater() || client.player.isClimbing()) {
+            return false;
+        }
+        double smashMin = Math.max(MINIMUM_SMASH_DISTANCE, fallDistance.getValue());
+        double currentFall = effectiveFallDistance();
+        if (currentFall >= smashMin) {
+            return true;
+        }
+        if (client.player.getVelocity().y >= -0.08) {
+            return false;
+        }
+        // Reject normal 1-block jumps (~1.25 blocks peak): only aim when total projected drop reaches smash threshold.
+        List<FallSample> samples = MovementSimulation.fallSamples(0);
+        double maxProjectedFall = currentFall;
+        for (FallSample sample : samples) {
+            if (sample.fallDistance() > maxProjectedFall) {
+                maxProjectedFall = sample.fallDistance();
+            }
+            if (maxProjectedFall >= smashMin) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private LivingEntity attackTarget() {
@@ -2031,6 +2076,7 @@ public class AutoMaceSwap extends Module {
         CatalogSettings.append(Module, fallDistance);
         CatalogSettings.append(Module, cps);
         CatalogSettings.append(Module, delay);
+        CatalogSettings.append(Module, pauseOnUse);
         CatalogSettings.append(Module, itemWhitelist);
         CatalogSettings.append(Module, hotbarWhitelist);
         CatalogSettings.append(Module, maceSwapRanges);

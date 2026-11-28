@@ -133,9 +133,8 @@ public final class StringEncryptionPass {
             }
         }
 
-        // Inject private static fields and lazy decoder method
+        // Inject private static encoded data field and on-demand local-scope decoder (no static String[] cache)
         int fieldAcc = Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC;
-        cn.fields.add(new FieldNode(fieldAcc, CACHE_FIELD, "[Ljava/lang/String;", null, null));
         if (chunks.size() == 1) {
             cn.fields.add(new FieldNode(fieldAcc | Opcodes.ACC_FINAL, DATA_FIELD, "Ljava/lang/String;", null, chunks.get(0)));
         } else {
@@ -160,36 +159,13 @@ public final class StringEncryptionPass {
 
         // locals:
         // 0: int idx
-        // 1: String[] cache
-        // 2: String cached / blob
+        // 1: (unused)
+        // 2: String blob
         // 3: int pos
         // 4: int i / j
         // 5: int len
         // 6: byte[] out
         // 7: int k
-        Label cacheReady = new Label();
-        mv.visitFieldInsn(Opcodes.GETSTATIC, owner, CACHE_FIELD, "[Ljava/lang/String;");
-        mv.visitVarInsn(Opcodes.ASTORE, 1);
-        mv.visitVarInsn(Opcodes.ALOAD, 1);
-        mv.visitJumpInsn(Opcodes.IFNONNULL, cacheReady);
-        pushIntMv(mv, count);
-        mv.visitTypeInsn(Opcodes.ANEWARRAY, "java/lang/String");
-        mv.visitInsn(Opcodes.DUP);
-        mv.visitVarInsn(Opcodes.ASTORE, 1);
-        mv.visitFieldInsn(Opcodes.PUTSTATIC, owner, CACHE_FIELD, "[Ljava/lang/String;");
-
-        mv.visitLabel(cacheReady);
-        mv.visitVarInsn(Opcodes.ALOAD, 1);
-        mv.visitVarInsn(Opcodes.ILOAD, 0);
-        mv.visitInsn(Opcodes.AALOAD);
-        mv.visitVarInsn(Opcodes.ASTORE, 2);
-        Label miss = new Label();
-        mv.visitVarInsn(Opcodes.ALOAD, 2);
-        mv.visitJumpInsn(Opcodes.IFNULL, miss);
-        mv.visitVarInsn(Opcodes.ALOAD, 2);
-        mv.visitInsn(Opcodes.ARETURN);
-
-        mv.visitLabel(miss);
         mv.visitFieldInsn(Opcodes.GETSTATIC, owner, DATA_FIELD, "Ljava/lang/String;");
         mv.visitVarInsn(Opcodes.ASTORE, 2); // blob
         if (chunks.size() > 1) {
@@ -297,12 +273,6 @@ public final class StringEncryptionPass {
         mv.visitVarInsn(Opcodes.ALOAD, 6);
         mv.visitFieldInsn(Opcodes.GETSTATIC, "java/nio/charset/StandardCharsets", "UTF_8", "Ljava/nio/charset/Charset;");
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/String", "<init>", "([BLjava/nio/charset/Charset;)V", false);
-        mv.visitVarInsn(Opcodes.ASTORE, 2);
-        mv.visitVarInsn(Opcodes.ALOAD, 1);
-        mv.visitVarInsn(Opcodes.ILOAD, 0);
-        mv.visitVarInsn(Opcodes.ALOAD, 2);
-        mv.visitInsn(Opcodes.AASTORE);
-        mv.visitVarInsn(Opcodes.ALOAD, 2);
         mv.visitInsn(Opcodes.ARETURN);
 
         mv.visitMaxs(0, 0);

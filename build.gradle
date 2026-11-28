@@ -17,6 +17,12 @@ base { archivesName = 'Clumps-fabric-1.21.11-29.0.0.1' }
 
 def devDiagnosticsEnabled = providers.gradleProperty('devDiagnostics').orElse('false').get().toBoolean()
 def obfuscateEnabled = !devDiagnosticsEnabled && providers.gradleProperty('obfuscate').orElse('true').get().toBoolean()
+// Skidfuscator 2.0.11's MapleIR lifter unconditionally drops FNEG/DNEG unary negation opcodes
+// even with all transformers disabled, corrupting rotation & trajectory math. Keep disabled by default;
+// Stages 1-4 (ProGuard 2-pass optimization + homoglyph flattening + Stage 2b cache-free StringEncryption +
+// Stage 3a IEEE-754 bit-exact ConstantAndFlowPass + Stage 3b Mixin obfuscation + Stage 2a Asset Vault)
+// provide full zero-leak obfuscation with 100% bit-exact JVM semantics.
+def skidfuscatorEnabled = obfuscateEnabled && providers.gradleProperty('skidfuscator').orElse('false').get().toBoolean()
 
 // Loom finalizes archive names in its own afterEvaluate, so the version suffix
 // is stripped after that runs: the release artifact is
@@ -34,11 +40,24 @@ afterEvaluate {
         }
     }
     if (obfuscateEnabled) {
+        def preProguardJar = tasks.named('jar').flatMap { it.archiveFile }
+        def preProguardDep = tasks.named('jar')
+        if (skidfuscatorEnabled) {
+            def skidfuscateJar = tasks.register('skidfuscateJar', com.blamejared.obf.SkidfuscatorObfuscateTask) {
+                dependsOn(tasks.named('jar'))
+                inputJar.set(tasks.named('jar').flatMap { it.archiveFile })
+                libraryClasspath.from(configurations.compileClasspath)
+                outputJar.set(layout.buildDirectory.file('obfuscation/skidfuscated-yarn.jar'))
+            }
+            preProguardJar = skidfuscateJar.flatMap { it.outputJar }
+            preProguardDep = skidfuscateJar
+        }
         def proguardJar = tasks.register('proguardJar', com.blamejared.obf.ProguardObfuscateTask) {
-            dependsOn(tasks.named('jar'))
-            inputJar.set(tasks.named('jar').flatMap { it.archiveFile })
+            dependsOn(preProguardDep)
+            inputJar.set(preProguardJar)
             libraryClasspath.from(configurations.compileClasspath)
             dictionarySeed.set(releaseVer.hashCode().toLong() ^ 0x4C554D50533631L)
+            skipOptimization.set(skidfuscatorEnabled)
             outputJar.set(layout.buildDirectory.file('obfuscation/proguarded-yarn.jar'))
             mappingFile.set(layout.buildDirectory.file('obfuscation/mapping.txt'))
         }
@@ -185,4 +204,9 @@ tasks.withType(Test).configureEach {
 
 tasks.named('compileJava') {
     options.forkOptions.jvmArgs = ['-XX:ActiveProcessorCount=2']
+    if (obfuscateEnabled) {
+        // Emit standard StringBuilder + LDC instead of Java 9+ StringConcatFactory bootstrap recipes
+        // so Skidfuscator + Stage 2b encrypt every concatenated string literal as well.
+        options.compilerArgs.add('-XDstringConcat=inline')
+    }
 }

@@ -40,8 +40,10 @@ public final class OverlayWorldGeometry extends WorldGeometry {
     private final LineBatch lines;
     private final TriangleBatch triangles;
     private final ParticleBatch particles;
+    private final VoxelBatch voxels;
     private final List<RenderBatch> batches = new ArrayList<>();
     private Texture overlayDepth;
+    private boolean hasGeometry;
 
     public OverlayWorldGeometry(RenderDevice device, Buffer cameraUniforms) {
         this.device = device;
@@ -50,7 +52,7 @@ public final class OverlayWorldGeometry extends WorldGeometry {
         lines = new LineBatch(device, cameraUniforms);
         triangles = new TriangleBatch(device, cameraUniforms);
         particles = new ParticleBatch(device, cameraUniforms);
-        VoxelBatch voxels = new VoxelBatch(device, cameraUniforms);
+        voxels = new VoxelBatch(device, cameraUniforms);
         batches.add(boxes);
         batches.add(tracers);
         batches.add(lines);
@@ -70,12 +72,17 @@ public final class OverlayWorldGeometry extends WorldGeometry {
 
     @Override
     public void beginFrame() {
+        hasGeometry = false;
         Framebuffer framebuffer = MinecraftRenderState.getFramebuffer(MinecraftClient.getInstance());
         if (overlayDepth.width != framebuffer.textureWidth || overlayDepth.height != framebuffer.textureHeight) {
             device.release(overlayDepth);
             allocateDepth();
         }
         batches.forEach(RenderBatch::reset);
+    }
+
+    public boolean hasGeometry() {
+        return hasGeometry || voxels.hasSections();
     }
 
     public void renderTo(TextureView colorTarget) {
@@ -98,26 +105,31 @@ public final class OverlayWorldGeometry extends WorldGeometry {
 
     @Override
     public void drawBox(double x, double y, double z, double width, double height, double depth, int color) {
+        hasGeometry = true;
         boxes.add(x, y, z, width, height, depth, color);
     }
 
     @Override
     public void drawTracer(double x, double y, double z, int color) {
+        hasGeometry = true;
         tracers.add(x, y, z, color, ClumpsClient.worldRenderer.cameraPosition);
     }
 
     @Override
     public void drawLine(double x1, double y1, double z1, double x2, double y2, double z2, int color) {
+        hasGeometry = true;
         lines.add(x1, y1, z1, x2, y2, z2, color, ClumpsClient.worldRenderer.cameraPosition);
     }
 
     @Override
     public void drawTriangle(double x1, double y1, double z1, int color1, double x2, double y2, double z2, int color2, double x3, double y3, double z3, int color3) {
+        hasGeometry = true;
         triangles.addTriangle(ClumpsClient.worldRenderer.cameraPosition, x1, y1, z1, color1, x2, y2, z2, color2, x3, y3, z3, color3);
     }
 
     @Override
     public void drawParticle(double x, double y, double z, float size, int color, ParticleUv uv, float rotation) {
+        hasGeometry = true;
         particles.add(x, y, z, size, color, uv, rotation, ClumpsClient.worldRenderer.cameraPosition);
     }
 }

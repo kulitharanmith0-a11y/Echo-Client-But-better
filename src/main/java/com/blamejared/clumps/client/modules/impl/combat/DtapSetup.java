@@ -184,6 +184,29 @@ public class DtapSetup extends Module {
             return;
         }
 
+        // Break an already-placed crystal directly under the crosshair whenever activation is pressed,
+        // even before swapping to obsidian/crystals.
+        if (isActivatePressed
+                && !isAutoCrystalActive()
+                && !shouldFakePunch()
+                && client.crosshairTarget instanceof EntityHitResult entityHit
+                && entityHit.getEntity() instanceof EndCrystalEntity crystal
+                && !crystal.isRemoved() && crystal.isAlive()) {
+            if (!isCoordinatorBusy() && breakReady
+                    && (!tickTiming.getValue() || !shouldWaitForTickTiming(crystal.getEntityPos()))) {
+                if (actions().executeEntityAttack(this, crystal, true).succeeded()) {
+                    recordCrystalBreak(crystal.getEntityPos());
+                    breakTimer.reset();
+                    sampledBreakDelayMs = sampleDelayMs(breakDelay);
+                }
+            }
+            if (isAllowedTriggerItem(client.player.getMainHandStack())) {
+                active = true;
+                crystalling = true;
+            }
+            return;
+        }
+
         // System Client Check Place: verify space above the targeted block is air and free of non-item entities
         if (!mainHandCrystal
                 && client.crosshairTarget instanceof BlockHitResult hitResult

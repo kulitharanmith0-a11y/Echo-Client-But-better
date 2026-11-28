@@ -5,7 +5,9 @@ import com.blamejared.clumps.client.event.Subscribe;
 import com.blamejared.clumps.client.event.window.WindowFocusEvent;
 import com.blamejared.clumps.client.event.window.WindowPositionEvent;
 import com.blamejared.clumps.client.event.window.WindowSizeEvent;
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.nio.LongBuffer;
 import net.minecraft.client.MinecraftClient;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFW;
@@ -17,6 +19,8 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Platform;
 import org.lwjgl.system.SharedLibrary;
+import org.lwjgl.system.libffi.FFICIF;
+import org.lwjgl.system.libffi.LibFFI;
 import org.lwjgl.system.macosx.ObjCRuntime;
 import org.lwjgl.system.windows.POINT;
 import org.lwjgl.system.windows.RECT;
@@ -24,17 +28,21 @@ import org.lwjgl.system.windows.User32;
 
 public final class WindowHandle implements WindowBackend {
     private static final int EXCLUDE_FROM_CAPTURE = 0x11;
-    private static final int MONITOR_CAPTURE = 0x01;
-    // Use 254 instead of 255 so Windows DWM always composites the overlay through its layered tree
-    // and never promotes a fullscreen-sized OpenGL overlay to DirectFlip/MPO (which bypasses display affinity).
+    // Use 254 instead of 255 so Windows DWM always composites through its layered tree
+    // and never promotes a fullscreen-sized overlay to DirectFlip/MPO.
     private static final int OVERLAY_VISIBLE_ALPHA = 254;
+    private static final int SRCCOPY = 0x00CC0020;
     private static final int GW_HWNDPREV = 3;
     private static final long HWND_NOTOPMOST = -2L;
     private static final long WINDOW_ABOVE = 1L;
     private static final long SHARING_NONE = 0L;
     private static final long COCOA_COLLECTION_FULLSCREEN_AUXILIARY = 2L | 256L;
+    private static final int BITMAPINFOHEADER_SIZE = 40;
+
     private static final SharedLibrary USER32 = Platform.get() == Platform.WINDOWS ? APIUtil.apiCreateLibrary("user32") : null;
+    private static final SharedLibrary GDI32 = Platform.get() == Platform.WINDOWS ? APIUtil.apiCreateLibrary("gdi32") : null;
     private static final SharedLibrary DWMAPI = Platform.get() == Platform.WINDOWS ? createOptionalLibrary("dwmapi") : null;
+
     private static final long FN_SET_WINDOW_DISPLAY_AFFINITY = functionAddress(USER32, "SetWindowDisplayAffinity");
     private static final long FN_GET_WINDOW_DISPLAY_AFFINITY = functionAddress(USER32, "GetWindowDisplayAffinity");
     private static final long FN_GET_CLIENT_RECT = functionAddress(USER32, "GetClientRect");
@@ -43,8 +51,19 @@ public final class WindowHandle implements WindowBackend {
     private static final long FN_SET_WINDOW_LONG_PTR = functionAddress(USER32, "SetWindowLongPtrW");
     private static final long FN_SET_LAYERED_WINDOW_ATTRIBUTES = functionAddress(USER32, "SetLayeredWindowAttributes");
     private static final long FN_SET_WINDOW_POS = functionAddress(USER32, "SetWindowPos");
+    private static final long FN_GET_DC = functionAddress(USER32, "GetDC");
+    private static final long FN_RELEASE_DC = functionAddress(USER32, "ReleaseDC");
+
+    private static final long FN_CREATE_COMPATIBLE_DC = functionAddress(GDI32, "CreateCompatibleDC");
+    private static final long FN_CREATE_DIB_SECTION = functionAddress(GDI32, "CreateDIBSection");
+    private static final long FN_SELECT_OBJECT = functionAddress(GDI32, "SelectObject");
+    private static final long FN_BIT_BLT = functionAddress(GDI32, "BitBlt");
+    private static final long FN_DELETE_OBJECT = functionAddress(GDI32, "DeleteObject");
+    private static final long FN_DELETE_DC = functionAddress(GDI32, "DeleteDC");
+
     private static final long FN_DWM_FLUSH = functionAddress(DWMAPI, "DwmFlush");
 
+    private final boolean layeredWindows;
     private final long window;
     private final long mainWindow;
     private final int[] horizontal = new int[1];
@@ -60,36 +79,72 @@ public final class WindowHandle implements WindowBackend {
     private boolean revealedOpaque;
     private boolean captureFailed;
     private boolean geometryChangedSinceVerify;
-    private int appliedAffinity = EXCLUDE_FROM_CAPTURE;
     private int currentAlpha = -1;
     private boolean lastMainFocused;
     private boolean lastMainTopmost;
 
+    // Win32 GDI DIBSection + BitBlt backing surface (zero OpenGL context, zero SwapBuffers -> immune to OBS Game Capture)
+    private long dibMemDc;
+    private long dibBitmap;
+    private long dibOldBitmap;
+    private long dibBitsPtr;
+    private int dibWidth;
+    private int dibHeight;
+    private FFICIF bitBltCif;
+    private PointerBuffer bitBltArgTypes;
+
     public WindowHandle(boolean openGl) {
         mainWindow = MinecraftClient.getInstance().getWindow().getHandle();
-        window = createOverlayWindow(openGl);
+        layeredWindows = Platform.get() == Platform.WINDOWS
+                && FN_GET_DC != 0L
+                && FN_RELEASE_DC != 0L
+                && FN_CREATE_COMPATIBLE_DC != 0L
+                && FN_CREATE_DIB_SECTION != 0L
+                && FN_SELECT_OBJECT != 0L
+                && FN_BIT_BLT != 0L
+                && FN_DELETE_OBJECT != 0L
+                && FN_DELETE_DC != 0L;
+        window = createOverlayWindow(!layeredWindows && openGl);
         if (window == 0L) throw new IllegalStateException("Surface creation failed: " + lastGlfwError());
+        if (layeredWindows) {
+            initBitBltCif();
+        }
         configureWindowStyles();
-        configureAndVerifyCaptureSharing();
-        attachToMainWindow();
         if (Platform.get() == Platform.WINDOWS) {
+            // Keep overlay strictly unowned on Windows so HWND_TOPMOST and WDA_EXCLUDEFROMCAPTURE never clash with owner Z-order.
+            detachFromMainWindow();
+            configureAndVerifyCaptureSharing();
             long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
             setWindowPos(overlay, 0L, 0, 0, 0, 0,
                     User32.SWP_NOACTIVATE | User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOZORDER | User32.SWP_FRAMECHANGED);
+        } else {
+            configureAndVerifyCaptureSharing();
+            attachToMainWindow();
         }
         synchronizeWithMainWindow();
         EventBus.register(this);
+    }
+
+    public boolean isLayeredWindows() {
+        return layeredWindows;
+    }
+
+    public boolean isOverlayRevealed() {
+        return visible && revealedOpaque;
     }
 
     private long createOverlayWindow(boolean openGl) {
         GLFW.glfwGetWindowSize(mainWindow, horizontal, vertical);
         int initialWidth = Math.max(1, horizontal[0]);
         int initialHeight = Math.max(1, vertical[0]);
-        long created = createOverlayWindowWithHints(initialWidth, initialHeight, openGl, 2);
-        if (created == 0L && openGl) {
+        if (!openGl) {
+            return createOverlayWindowWithHints(initialWidth, initialHeight, false, 0);
+        }
+        long created = createOverlayWindowWithHints(initialWidth, initialHeight, true, 2);
+        if (created == 0L) {
             created = createOverlayWindowWithHints(initialWidth, initialHeight, true, 1);
         }
-        if (created == 0L && openGl) {
+        if (created == 0L) {
             created = createOverlayWindowWithHints(initialWidth, initialHeight, true, 0);
         }
         return created;
@@ -137,7 +192,8 @@ public final class WindowHandle implements WindowBackend {
         }
         GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE);
         GLFW.glfwWindowHint(GLFW.GLFW_TRANSPARENT_FRAMEBUFFER, GLFW.GLFW_FALSE);
-        GLFW.glfwWindowHint(GLFW.GLFW_MOUSE_PASSTHROUGH, GLFW.GLFW_TRUE);
+        // Set WS_EX_LAYERED | WS_EX_TRANSPARENT ourselves on Windows so GLFW doesn't override LWA_ALPHA behind our back.
+        GLFW.glfwWindowHint(GLFW.GLFW_MOUSE_PASSTHROUGH, Platform.get() == Platform.WINDOWS ? GLFW.GLFW_FALSE : GLFW.GLFW_TRUE);
         GLFW.glfwWindowHint(GLFW.GLFW_FOCUS_ON_SHOW, GLFW.GLFW_FALSE);
         GLFW.glfwWindowHint(GLFW.GLFW_FLOATING, GLFW.GLFW_FALSE);
         GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_FALSE);
@@ -178,37 +234,35 @@ public final class WindowHandle implements WindowBackend {
         if (isOwnerMinimizedOrHidden() || isOwnerExclusiveFullscreen()) {
             return false;
         }
-        if (visible && revealedOpaque) {
-            if (geometryChangedSinceVerify && Platform.get() == Platform.WINDOWS) {
-                geometryChangedSinceVerify = false;
-                long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
-                if (overlay != 0L) {
+        if (Platform.get() == Platform.WINDOWS) {
+            long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
+            if (overlay == 0L) {
+                captureFailed = true;
+                return false;
+            }
+            if (visible && revealedOpaque) {
+                if (geometryChangedSinceVerify) {
+                    geometryChangedSinceVerify = false;
                     configureWindowStyles();
-                    attachToMainWindow();
+                    detachFromMainWindow();
                     if (!configureAndVerifyCaptureSharing()) {
                         captureFailed = true;
                         setVisible(false);
                         return false;
                     }
                     setOverlayAlpha(overlay, OVERLAY_VISIBLE_ALPHA);
+                    reassertOverlayZOrder(overlay);
                     flushDwm();
                 }
-            }
-            if (!ensureCaptureProtected()) {
-                captureFailed = true;
-                setVisible(false);
-                return false;
-            }
-            return true;
-        }
-        if (shownForReveal && !revealedOpaque) {
-            if (Platform.get() == Platform.WINDOWS) {
-                long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
-                if (overlay == 0L) {
+                if (!ensureCaptureProtected()) {
                     captureFailed = true;
                     setVisible(false);
                     return false;
                 }
+                captureFailed = false;
+                return true;
+            }
+            if (shownForReveal && !revealedOpaque) {
                 if (!isCaptureAffinityActive(overlay)) {
                     if (!configureAndVerifyCaptureSharing()) {
                         captureFailed = true;
@@ -217,29 +271,25 @@ public final class WindowHandle implements WindowBackend {
                     }
                     flushDwm();
                 }
+                captureFailed = false;
+                return true;
             }
-            captureFailed = false;
-            return true;
-        }
-        if (Platform.get() == Platform.WINDOWS) {
-            long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
-            if (overlay == 0L) {
-                captureFailed = true;
-                return false;
-            }
+
             revealedOpaque = false;
             configureWindowStyles();
             setOverlayAlpha(overlay, 0);
-            attachToMainWindow();
+            detachFromMainWindow();
             synchronizeWithMainWindow();
             if (width <= 0 || height <= 0 || isOwnerMinimizedOrHidden() || isOwnerExclusiveFullscreen()) {
                 return false;
             }
             GLFW.glfwShowWindow(window);
             shownForReveal = true;
-            setWindowPos(overlay, User32.HWND_TOP, x, y, width, height,
+            long owner = GLFWNativeWin32.glfwGetWin32Window(mainWindow);
+            long initialInsert = shouldBeTopmost(overlay, owner, x, y, width, height)
+                    ? User32.HWND_TOPMOST : User32.HWND_TOP;
+            setWindowPos(overlay, initialInsert, x, y, width, height,
                     User32.SWP_NOACTIVATE | User32.SWP_SHOWWINDOW | User32.SWP_FRAMECHANGED);
-            synchronizeWithMainWindow();
             if (!configureAndVerifyCaptureSharing()) {
                 flushDwm();
                 if (!configureAndVerifyCaptureSharing()) {
@@ -248,11 +298,16 @@ public final class WindowHandle implements WindowBackend {
                     return false;
                 }
             }
+            reassertOverlayZOrder(overlay);
             flushDwm();
             captureFailed = false;
             return true;
         }
+
         if (Platform.get() == Platform.MACOSX) {
+            if (visible && shownForReveal) {
+                return true;
+            }
             attachToMainWindow();
             configureAndVerifyCaptureSharing();
             synchronizeWithMainWindow();
@@ -267,6 +322,184 @@ public final class WindowHandle implements WindowBackend {
             return true;
         }
         return false;
+    }
+
+    public boolean presentLayeredBgra(long srcPixelsPtr, int srcWidth, int srcHeight) {
+        if (!layeredWindows || srcPixelsPtr == 0L || srcWidth <= 0 || srcHeight <= 0) {
+            return false;
+        }
+        long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
+        if (overlay == 0L || (!visible && !shownForReveal)) {
+            return false;
+        }
+        if (!isCaptureAffinityActive(overlay)) {
+            setOverlayAlpha(overlay, 0);
+            revealedOpaque = false;
+            if (!configureAndVerifyCaptureSharing()) {
+                captureFailed = true;
+                setVisible(false);
+                return false;
+            }
+            flushDwm();
+        }
+        if (!ensureDibSection(overlay, srcWidth, srcHeight)) {
+            return false;
+        }
+        long byteCount = (long) srcWidth * (long) srcHeight * 4L;
+        MemoryUtil.memCopy(srcPixelsPtr, dibBitsPtr, byteCount);
+
+        long winDc = JNI.invokePP(overlay, FN_GET_DC);
+        if (winDc == 0L) {
+            return false;
+        }
+        boolean blitted;
+        try {
+            blitted = bitBlt(winDc, 0, 0, srcWidth, srcHeight, dibMemDc, 0, 0, SRCCOPY);
+        } finally {
+            JNI.invokePPI(overlay, winDc, FN_RELEASE_DC);
+        }
+        if (blitted) {
+            visible = true;
+            if (!revealedOpaque) {
+                setOverlayAlpha(overlay, OVERLAY_VISIBLE_ALPHA);
+                flushDwm();
+                revealedOpaque = true;
+            }
+        }
+        return blitted;
+    }
+
+    public void clearLayeredTransparent() {
+        setVisible(false);
+    }
+
+    private boolean ensureDibSection(long overlayHwnd, int targetWidth, int targetHeight) {
+        if (targetWidth <= 0 || targetHeight <= 0) {
+            return false;
+        }
+        if (dibMemDc != 0L && dibBitmap != 0L && dibBitsPtr != 0L
+                && dibWidth == targetWidth && dibHeight == targetHeight) {
+            return true;
+        }
+        destroyDibResources();
+        long refDc = JNI.invokePP(overlayHwnd, FN_GET_DC);
+        if (refDc == 0L) {
+            return false;
+        }
+        try {
+            long memDc = JNI.invokePP(refDc, FN_CREATE_COMPATIBLE_DC);
+            if (memDc == 0L) {
+                return false;
+            }
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                ByteBuffer bmi = stack.calloc(BITMAPINFOHEADER_SIZE + 4);
+                bmi.putInt(0, BITMAPINFOHEADER_SIZE); // biSize
+                bmi.putInt(4, targetWidth);           // biWidth
+                bmi.putInt(8, -targetHeight);         // biHeight (negative = top-down DIB matching OpenGL FBO row order)
+                bmi.putShort(12, (short) 1);          // biPlanes
+                bmi.putShort(14, (short) 32);         // biBitCount
+                bmi.putInt(16, 0);                    // biCompression = BI_RGB
+                bmi.putInt(20, targetWidth * targetHeight * 4);
+                PointerBuffer bitsOut = stack.callocPointer(1);
+                long hBitmap = JNI.invokePJPPP(memDc, MemoryUtil.memAddress(bmi), 0,
+                        MemoryUtil.memAddress(bitsOut), 0L, 0, FN_CREATE_DIB_SECTION);
+                long bitsPtr = bitsOut.get(0);
+                if (hBitmap == 0L || bitsPtr == 0L) {
+                    if (hBitmap != 0L) JNI.invokePI(hBitmap, FN_DELETE_OBJECT);
+                    JNI.invokePI(memDc, FN_DELETE_DC);
+                    return false;
+                }
+                long oldObj = JNI.invokePPP(memDc, hBitmap, FN_SELECT_OBJECT);
+                dibMemDc = memDc;
+                dibBitmap = hBitmap;
+                dibOldBitmap = oldObj;
+                dibBitsPtr = bitsPtr;
+                dibWidth = targetWidth;
+                dibHeight = targetHeight;
+                MemoryUtil.memSet(dibBitsPtr, 0, (long) targetWidth * (long) targetHeight * 4L);
+                return true;
+            }
+        } finally {
+            JNI.invokePPI(overlayHwnd, refDc, FN_RELEASE_DC);
+        }
+    }
+
+    private void initBitBltCif() {
+        FFICIF cif = FFICIF.calloc();
+        PointerBuffer argTypes = MemoryUtil.memAllocPointer(9);
+        argTypes.put(0, LibFFI.ffi_type_pointer);
+        argTypes.put(1, LibFFI.ffi_type_sint32);
+        argTypes.put(2, LibFFI.ffi_type_sint32);
+        argTypes.put(3, LibFFI.ffi_type_sint32);
+        argTypes.put(4, LibFFI.ffi_type_sint32);
+        argTypes.put(5, LibFFI.ffi_type_pointer);
+        argTypes.put(6, LibFFI.ffi_type_sint32);
+        argTypes.put(7, LibFFI.ffi_type_sint32);
+        argTypes.put(8, LibFFI.ffi_type_uint32);
+        int status = LibFFI.ffi_prep_cif(cif, LibFFI.FFI_DEFAULT_ABI, LibFFI.ffi_type_sint32, argTypes);
+        if (status != LibFFI.FFI_OK) {
+            MemoryUtil.memFree(argTypes);
+            cif.free();
+            return;
+        }
+        bitBltCif = cif;
+        bitBltArgTypes = argTypes;
+    }
+
+    private void destroyBitBltCif() {
+        if (bitBltCif != null) {
+            bitBltCif.free();
+            bitBltCif = null;
+        }
+        if (bitBltArgTypes != null) {
+            MemoryUtil.memFree(bitBltArgTypes);
+            bitBltArgTypes = null;
+        }
+    }
+
+    private boolean bitBlt(long dstDc, int dx, int dy, int w, int h, long srcDc, int sx, int sy, int rop) {
+        if (FN_BIT_BLT == 0L || dstDc == 0L || srcDc == 0L || bitBltCif == null) {
+            return false;
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            LongBuffer a0 = stack.longs(dstDc);
+            IntBuffer a1 = stack.ints(dx);
+            IntBuffer a2 = stack.ints(dy);
+            IntBuffer a3 = stack.ints(w);
+            IntBuffer a4 = stack.ints(h);
+            LongBuffer a5 = stack.longs(srcDc);
+            IntBuffer a6 = stack.ints(sx);
+            IntBuffer a7 = stack.ints(sy);
+            IntBuffer a8 = stack.ints(rop);
+            PointerBuffer vals = stack.pointers(
+                    MemoryUtil.memAddress(a0), MemoryUtil.memAddress(a1), MemoryUtil.memAddress(a2),
+                    MemoryUtil.memAddress(a3), MemoryUtil.memAddress(a4), MemoryUtil.memAddress(a5),
+                    MemoryUtil.memAddress(a6), MemoryUtil.memAddress(a7), MemoryUtil.memAddress(a8));
+            ByteBuffer ret = stack.calloc(8);
+            LibFFI.ffi_call(bitBltCif, FN_BIT_BLT, ret, vals);
+            return ret.getInt(0) != 0;
+        }
+    }
+
+    private void destroyDibResources() {
+        if (dibMemDc != 0L) {
+            if (dibOldBitmap != 0L) {
+                JNI.invokePPP(dibMemDc, dibOldBitmap, FN_SELECT_OBJECT);
+                dibOldBitmap = 0L;
+            }
+            if (dibBitmap != 0L) {
+                JNI.invokePI(dibBitmap, FN_DELETE_OBJECT);
+                dibBitmap = 0L;
+            }
+            JNI.invokePI(dibMemDc, FN_DELETE_DC);
+            dibMemDc = 0L;
+        } else if (dibBitmap != 0L) {
+            JNI.invokePI(dibBitmap, FN_DELETE_OBJECT);
+            dibBitmap = 0L;
+        }
+        dibBitsPtr = 0L;
+        dibWidth = 0;
+        dibHeight = 0;
     }
 
     @Override
@@ -318,8 +551,9 @@ public final class WindowHandle implements WindowBackend {
             boolean mainFocused = foreground == owner || foreground == overlay
                     || GLFW.glfwGetWindowAttrib(mainWindow, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
             boolean mainTopmost = (User32.GetWindowLongPtr(owner, User32.GWL_EXSTYLE) & User32.WS_EX_TOPMOST) != 0L;
+            boolean borderlessFull = isOwnerBorderlessFullscreen(targetX, targetY, targetWidth, targetHeight);
             boolean overlayTopmost = (User32.GetWindowLongPtr(overlay, User32.GWL_EXSTYLE) & User32.WS_EX_TOPMOST) != 0L;
-            boolean wantTopmost = mainTopmost && mainFocused;
+            boolean wantTopmost = mainFocused && (mainTopmost || borderlessFull);
 
             if (!visible && !shownForReveal) {
                 if (changed) {
@@ -336,7 +570,7 @@ public final class WindowHandle implements WindowBackend {
                 long visibleAboveOwner = findVisibleWindowAbove(owner);
                 boolean directlyAboveOwner = visibleAboveOwner == overlay;
                 if (wantTopmost) {
-                    if (!overlayTopmost || !directlyAboveOwner) {
+                    if (!overlayTopmost || !directlyAboveOwner || changed || !lastMainFocused) {
                         insertAfter = User32.HWND_TOPMOST;
                         zFlag = 0;
                     }
@@ -359,33 +593,82 @@ public final class WindowHandle implements WindowBackend {
             }
             lastMainFocused = mainFocused;
             lastMainTopmost = wantTopmost;
-        } else {
-            GLFW.glfwGetWindowPos(mainWindow, horizontal, vertical);
-            targetX = horizontal[0];
-            targetY = vertical[0];
-            GLFW.glfwGetWindowSize(mainWindow, horizontal, vertical);
-            targetWidth = horizontal[0];
-            targetHeight = vertical[0];
-            if (targetWidth <= 0 || targetHeight <= 0) {
-                setVisible(false);
-                return;
-            }
-            boolean changed = targetX != x || targetY != y || targetWidth != width || targetHeight != height;
-            if (changed) {
-                geometryChangedSinceVerify = true;
-            }
-            x = targetX;
-            y = targetY;
-            width = targetWidth;
-            height = targetHeight;
-            if (changed) {
-                GLFW.glfwSetWindowSize(window, width, height);
-                GLFW.glfwSetWindowPos(window, x, y);
-            }
+            framebufferWidth = width;
+            framebufferHeight = height;
+            return;
+        }
+
+        GLFW.glfwGetWindowPos(mainWindow, horizontal, vertical);
+        targetX = horizontal[0];
+        targetY = vertical[0];
+        GLFW.glfwGetWindowSize(mainWindow, horizontal, vertical);
+        targetWidth = horizontal[0];
+        targetHeight = vertical[0];
+        if (targetWidth <= 0 || targetHeight <= 0) {
+            setVisible(false);
+            return;
+        }
+        boolean changed = targetX != x || targetY != y || targetWidth != width || targetHeight != height;
+        if (changed) {
+            geometryChangedSinceVerify = true;
+        }
+        x = targetX;
+        y = targetY;
+        width = targetWidth;
+        height = targetHeight;
+        if (changed) {
+            GLFW.glfwSetWindowSize(window, width, height);
+            GLFW.glfwSetWindowPos(window, x, y);
         }
         GLFW.glfwGetFramebufferSize(window, horizontal, vertical);
-        framebufferWidth = horizontal[0];
-        framebufferHeight = vertical[0];
+        framebufferWidth = horizontal[0] > 0 ? horizontal[0] : width;
+        framebufferHeight = vertical[0] > 0 ? vertical[0] : height;
+    }
+
+    private boolean isOwnerBorderlessFullscreen(int winX, int winY, int winW, int winH) {
+        if (mainWindow == 0L || winW <= 0 || winH <= 0) {
+            return false;
+        }
+        if (GLFW.glfwGetWindowAttrib(mainWindow, GLFW.GLFW_DECORATED) == GLFW.GLFW_TRUE) {
+            return false;
+        }
+        PointerBuffer monitors = GLFW.glfwGetMonitors();
+        if (monitors == null) {
+            return false;
+        }
+        int[] monX = new int[1];
+        int[] monY = new int[1];
+        for (int i = 0; i < monitors.limit(); i++) {
+            long mon = monitors.get(i);
+            var mode = GLFW.glfwGetVideoMode(mon);
+            if (mode == null) continue;
+            GLFW.glfwGetMonitorPos(mon, monX, monY);
+            if (Math.abs(winX - monX[0]) <= 2 && Math.abs(winY - monY[0]) <= 2
+                    && winW >= mode.width() && winH >= mode.height()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean shouldBeTopmost(long overlay, long owner, int winX, int winY, int winW, int winH) {
+        if (owner == 0L) return false;
+        long foreground = FN_GET_FOREGROUND_WINDOW != 0L ? JNI.invokeP(FN_GET_FOREGROUND_WINDOW) : 0L;
+        boolean mainFocused = foreground == owner || foreground == overlay
+                || GLFW.glfwGetWindowAttrib(mainWindow, GLFW.GLFW_FOCUSED) == GLFW.GLFW_TRUE;
+        if (!mainFocused) return false;
+        boolean mainTopmost = (User32.GetWindowLongPtr(owner, User32.GWL_EXSTYLE) & User32.WS_EX_TOPMOST) != 0L;
+        return mainTopmost || isOwnerBorderlessFullscreen(winX, winY, winW, winH);
+    }
+
+    private void reassertOverlayZOrder(long overlay) {
+        if (Platform.get() != Platform.WINDOWS || overlay == 0L || mainWindow == 0L) return;
+        long owner = GLFWNativeWin32.glfwGetWin32Window(mainWindow);
+        boolean wantTopmost = shouldBeTopmost(overlay, owner, x, y, width, height);
+        long insertAfter = wantTopmost ? User32.HWND_TOPMOST : User32.HWND_TOP;
+        setWindowPos(overlay, insertAfter, x, y, width, height,
+                User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER | User32.SWP_FRAMECHANGED);
+        lastMainTopmost = wantTopmost;
     }
 
     @Override
@@ -434,6 +717,8 @@ public final class WindowHandle implements WindowBackend {
     public void close() {
         EventBus.unregister(this);
         setVisible(false);
+        destroyDibResources();
+        destroyBitBltCif();
         detachFromMainWindow();
         GLFW.glfwDestroyWindow(window);
     }
@@ -482,8 +767,8 @@ public final class WindowHandle implements WindowBackend {
     }
 
     private void setOverlayAlpha(long overlay, int alpha) {
-        if (currentAlpha != alpha) {
-            setLayeredWindowAttributes(overlay, 0, (byte) alpha, User32.LWA_ALPHA);
+        if (currentAlpha != alpha && FN_SET_LAYERED_WINDOW_ATTRIBUTES != 0L && overlay != 0L) {
+            JNI.invokePI(overlay, 0, alpha & 0xFF, User32.LWA_ALPHA, FN_SET_LAYERED_WINDOW_ATTRIBUTES);
             currentAlpha = alpha;
         }
     }
@@ -498,30 +783,19 @@ public final class WindowHandle implements WindowBackend {
     }
 
     private void attachToMainWindow() {
-        switch (Platform.get()) {
-            case WINDOWS -> {
-                long overlay = GLFWNativeWin32.glfwGetWin32Window(window);
-                long owner = GLFWNativeWin32.glfwGetWin32Window(mainWindow);
-                if (overlay != 0L && owner != 0L) {
-                    setWindowLongPtr(overlay, User32.GWL_HWNDPARENT, owner);
-                }
+        if (Platform.get() == Platform.MACOSX) {
+            long overlay = GLFWNativeCocoa.glfwGetCocoaWindow(window);
+            long owner = GLFWNativeCocoa.glfwGetCocoaWindow(mainWindow);
+            if (overlay == 0L || owner == 0L) {
+                return;
             }
-            case MACOSX -> {
-                long overlay = GLFWNativeCocoa.glfwGetCocoaWindow(window);
-                long owner = GLFWNativeCocoa.glfwGetCocoaWindow(mainWindow);
-                if (overlay == 0L || owner == 0L) {
-                    return;
-                }
-                long sendMessage = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
-                long setIgnoresMouse = ObjCRuntime.sel_getUid("setIgnoresMouseEvents:");
-                JNI.invokePPV(overlay, setIgnoresMouse, true, sendMessage);
-                long setCollectionBehavior = ObjCRuntime.sel_getUid("setCollectionBehavior:");
-                JNI.invokePPPV(overlay, setCollectionBehavior, COCOA_COLLECTION_FULLSCREEN_AUXILIARY, sendMessage);
-                long addChild = ObjCRuntime.sel_getUid("addChildWindow:ordered:");
-                JNI.invokePPPPV(owner, addChild, overlay, WINDOW_ABOVE, sendMessage);
-            }
-            default -> {
-            }
+            long sendMessage = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
+            long setIgnoresMouse = ObjCRuntime.sel_getUid("setIgnoresMouseEvents:");
+            JNI.invokePPV(overlay, setIgnoresMouse, true, sendMessage);
+            long setCollectionBehavior = ObjCRuntime.sel_getUid("setCollectionBehavior:");
+            JNI.invokePPPV(overlay, setCollectionBehavior, COCOA_COLLECTION_FULLSCREEN_AUXILIARY, sendMessage);
+            long addChild = ObjCRuntime.sel_getUid("addChildWindow:ordered:");
+            JNI.invokePPPPV(owner, addChild, overlay, WINDOW_ABOVE, sendMessage);
         }
     }
 
@@ -557,23 +831,9 @@ public final class WindowHandle implements WindowBackend {
                 if (overlay == 0L) {
                     return false;
                 }
-                if (trySetCaptureAffinity(overlay, EXCLUDE_FROM_CAPTURE)) {
-                    appliedAffinity = EXCLUDE_FROM_CAPTURE;
-                    return isCaptureAffinityActive(overlay);
-                }
-                // Retry unowned in case Windows DWM rejects affinity while GWL_HWNDPARENT is attached.
                 detachFromMainWindow();
-                boolean detachedSucceeded = trySetCaptureAffinity(overlay, EXCLUDE_FROM_CAPTURE);
-                attachToMainWindow();
-                if (detachedSucceeded) {
-                    appliedAffinity = EXCLUDE_FROM_CAPTURE;
-                    return isCaptureAffinityActive(overlay);
-                }
-                if (trySetCaptureAffinity(overlay, MONITOR_CAPTURE)) {
-                    appliedAffinity = MONITOR_CAPTURE;
-                    return isCaptureAffinityActive(overlay);
-                }
-                return false;
+                return trySetCaptureAffinity(overlay, EXCLUDE_FROM_CAPTURE)
+                        && isCaptureAffinityActive(overlay);
             }
             case MACOSX -> {
                 long overlay = GLFWNativeCocoa.glfwGetCocoaWindow(window);
@@ -634,8 +894,7 @@ public final class WindowHandle implements WindowBackend {
             if (JNI.invokePPI(overlay, MemoryUtil.memAddress(affinity), FN_GET_WINDOW_DISPLAY_AFFINITY) == 0) {
                 return false;
             }
-            int current = affinity.get(0);
-            return current == appliedAffinity || current == EXCLUDE_FROM_CAPTURE || current == MONITOR_CAPTURE;
+            return affinity.get(0) == EXCLUDE_FROM_CAPTURE;
         }
     }
 
@@ -662,12 +921,6 @@ public final class WindowHandle implements WindowBackend {
     private static void setWindowLongPtr(long hwnd, int index, long value) {
         if (FN_SET_WINDOW_LONG_PTR != 0L && hwnd != 0L) {
             JNI.invokePPP(hwnd, index, value, FN_SET_WINDOW_LONG_PTR);
-        }
-    }
-
-    private static void setLayeredWindowAttributes(long hwnd, int colorKey, byte alpha, int flags) {
-        if (FN_SET_LAYERED_WINDOW_ATTRIBUTES != 0L && hwnd != 0L) {
-            JNI.invokePI(hwnd, colorKey, alpha & 0xFF, flags, FN_SET_LAYERED_WINDOW_ATTRIBUTES);
         }
     }
 

@@ -30,6 +30,8 @@ public final class ModuleConfig implements AutoCloseable {
     private final ProfileCatalog catalog;
     private boolean preserveClickGuiBindings;
     private boolean skipFriendsOnApply;
+    private boolean skipBindsOnApply;
+    private static volatile boolean preserveBindsOnCloudLoad = true;
 
     
     public boolean loading;
@@ -58,6 +60,15 @@ public final class ModuleConfig implements AutoCloseable {
         this.clientState = Objects.requireNonNull(clientState, "clientState");
         io = new ProfileIo(profiles);
         catalog = new ProfileCatalog(io);
+    }
+
+    
+    public static boolean isPreserveBindsOnCloudLoad() {
+        return preserveBindsOnCloudLoad;
+    }
+
+    public static void setPreserveBindsOnCloudLoad(boolean preserve) {
+        preserveBindsOnCloudLoad = preserve;
     }
 
     
@@ -155,7 +166,7 @@ public final class ModuleConfig implements AutoCloseable {
             if (entry.has("enabled") && feature.persistsEnabledState()) {
                 feature.setEnabled(entry.get("enabled").getAsBoolean());
             }
-            boolean keepBinding = preserveClickGuiBindings && clientState.isClickGui(feature);
+            boolean keepBinding = skipBindsOnApply || (preserveClickGuiBindings && clientState.isClickGui(feature));
             if (!keepBinding && entry.has("keybind")) {
                 feature.setKey(SettingCodec.readKey(entry.get("keybind")));
             }
@@ -223,10 +234,12 @@ public final class ModuleConfig implements AutoCloseable {
     
     public boolean loadSnapshotPreservingFriends(String data) {
         skipFriendsOnApply = true;
+        skipBindsOnApply = preserveBindsOnCloudLoad;
         try {
             return loadSnapshot(data);
         } finally {
             skipFriendsOnApply = false;
+            skipBindsOnApply = false;
         }
     }
 
@@ -347,6 +360,19 @@ public final class ModuleConfig implements AutoCloseable {
             return selectLocalAndApply(saved.id(), true);
         }
         return applyProfileResponse(io.selectProfile(id == null ? "" : id));
+    }
+
+    public StoreMeta saveCloudCopyOnly(String cloudId) {
+        if (clientState.writesDisabled() || !io.isAvailable() || !CloudConfigCatalog.isCloudId(cloudId)) {
+            return null;
+        }
+        CloudConfigCatalog.CloudEntry entry = CloudConfigCatalog.findById(cloudId);
+        if (entry == null) {
+            return null;
+        }
+        String localName = uniqueLocalName(entry.meta().name());
+        return catalog.save("", localName, entry.meta().description(), false, entry.meta().type(),
+                entry.dataJson(), entry.meta().id(), entry.meta().serverName(), entry.meta().serverIp());
     }
 
     
